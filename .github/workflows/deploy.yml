@@ -1,0 +1,82 @@
+name: CI/CD - Build & Déploiement
+
+on:
+  push:
+    branches: [ "main", "master" ]
+  pull_request:
+    branches: [ "main", "master" ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  # 1. Validation du code et compilation de l'application
+  build-and-test:
+    name: Validation & Compilation
+    runs-on: ubuntu-latest
+    steps:
+      - name: Récupérer le code source
+        uses: actions/checkout@v4
+
+      - name: Configurer Node.js (version 20)
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: Installer les dépendances
+        run: npm ci
+
+      - name: Vérifier la conformité TypeScript
+        run: npm run lint
+
+      - name: Compiler le projet (Client Vite + Serveur esbuild)
+        run: npm run build
+
+      - name: Sauvegarder les fichiers compilés (dist)
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-dist
+          path: dist/
+          retention-days: 7
+
+  # 2. Construction et publication automatique de l'image Docker (GHCR)
+  docker-publish:
+    name: Image Docker & Déploiement
+    needs: build-and-test
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
+    steps:
+      - name: Récupérer le code source
+        uses: actions/checkout@v4
+
+      - name: Configurer Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Se connecter au registre GitHub Packages (GHCR)
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Définir les tags et métadonnées Docker
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository }}
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=sha,format=short
+
+      - name: Construire et pousser l'image Docker
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
