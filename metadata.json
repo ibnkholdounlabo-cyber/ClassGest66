@@ -1,0 +1,8 @@
+{
+  "name": "Gestion des Classes et Élèves",
+  "description": "Serveur intranet scolaire avec gestion des classes et élèves, cours interactifs, tests de rapidité de frappe clavier avec déverrouillage séquentiel et évaluations complètes.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

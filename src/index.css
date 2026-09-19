@@ -1,0 +1,16 @@
+@import "tailwindcss";
+
+@media print {
+  .no-print, header, footer {
+    display: none !important;
+  }
+  body {
+    background: white !important;
+  }
+  .print-area {
+    max-height: none !important;
+    overflow: visible !important;
+    background: transparent !important;
+    padding: 0 !important;
+  }
+}
