@@ -18,7 +18,8 @@ import {
   AttendanceSession,
   StudentAttendanceSummary,
   ClassDisciplineStats,
-  SessionStatus
+  SessionStatus,
+  StudentTodayAttendance
 } from './types';
 
 const API_BASE = '/api';
@@ -930,6 +931,67 @@ export const api = {
       `${API_BASE}/student/attendance`,
       { headers: { Authorization: `Bearer ${token}` } },
       'Impossible de charger l’historique des présences'
+    );
+  },
+
+  async studentGetTodayAttendance(token: string): Promise<StudentTodayAttendance> {
+    return safeFetchJson<StudentTodayAttendance>(
+      `${API_BASE}/student/attendance/today`,
+      { headers: { Authorization: `Bearer ${token}` } },
+      'Impossible de charger l’état de présence du jour'
+    );
+  },
+
+  async studentMarkPresenceToday(token: string): Promise<{
+    success: boolean;
+    session: AttendanceSession;
+    record: AttendanceRecord;
+    alreadyMarked: boolean;
+  }> {
+    return safeFetchJson(
+      `${API_BASE}/student/attendance/mark-presence`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`
+        }
+      },
+      'Erreur lors de la confirmation de votre présence'
+    );
+  },
+
+  async studentUploadActivityFile(
+    token: string,
+    data: {
+      fileUrl: string;
+      fileName: string;
+      fileType: string;
+      fileSize: number;
+    }
+  ): Promise<{ success: boolean; session: AttendanceSession; record: AttendanceRecord }> {
+    return safeFetchJson(
+      `${API_BASE}/student/attendance/activity-file`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`
+        },
+        body: JSON.stringify(data)
+      },
+      'Erreur lors du dépôt du fichier d’activité'
+    );
+  },
+
+  async studentDeleteActivityFile(token: string): Promise<{ success: boolean; record?: AttendanceRecord }> {
+    return safeFetchJson(
+      `${API_BASE}/student/attendance/activity-file`,
+      {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${token}` }
+      },
+      'Erreur lors de la suppression du fichier d’activité'
     );
   }
 };

@@ -241,10 +241,24 @@ export interface AttendanceRecord {
   optionsJson?: string;
   score?: number;
   options?: AttendanceDisciplineOption[];
+  markedByStudentAt?: string;
+  activityFileUrl?: string;
+  activityFileName?: string;
+  activityFileType?: string;
+  activityFileSize?: number;
+  activityUploadedAt?: string;
   updatedAt: string;
   studentName?: string;
   studentNumber?: string;
   isRepeating?: boolean;
+}
+
+export interface StudentTodayAttendance {
+  date: string;
+  session: AttendanceSession | null;
+  record: AttendanceRecord | null;
+  hasMarkedToday: boolean;
+  markedAt?: string;
 }
 
 export interface AttendanceSession {

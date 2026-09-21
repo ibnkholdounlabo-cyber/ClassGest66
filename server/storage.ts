@@ -405,6 +405,12 @@ class SQLiteStorage {
         notes TEXT DEFAULT '',
         optionsJson TEXT DEFAULT '[]',
         score INTEGER DEFAULT 0,
+        markedByStudentAt TEXT DEFAULT '',
+        activityFileUrl TEXT DEFAULT '',
+        activityFileName TEXT DEFAULT '',
+        activityFileType TEXT DEFAULT '',
+        activityFileSize INTEGER DEFAULT 0,
+        activityUploadedAt TEXT DEFAULT '',
         updatedAt TEXT NOT NULL,
         FOREIGN KEY (sessionId) REFERENCES attendance_sessions(id) ON DELETE CASCADE,
         FOREIGN KEY (studentId) REFERENCES students(id) ON DELETE CASCADE,
@@ -472,6 +478,24 @@ class SQLiteStorage {
     } catch {}
     try {
       this.db.exec("ALTER TABLE attendance_records ADD COLUMN score INTEGER DEFAULT 0;");
+    } catch {}
+    try {
+      this.db.exec("ALTER TABLE attendance_records ADD COLUMN markedByStudentAt TEXT DEFAULT '';");
+    } catch {}
+    try {
+      this.db.exec("ALTER TABLE attendance_records ADD COLUMN activityFileUrl TEXT DEFAULT '';");
+    } catch {}
+    try {
+      this.db.exec("ALTER TABLE attendance_records ADD COLUMN activityFileName TEXT DEFAULT '';");
+    } catch {}
+    try {
+      this.db.exec("ALTER TABLE attendance_records ADD COLUMN activityFileType TEXT DEFAULT '';");
+    } catch {}
+    try {
+      this.db.exec("ALTER TABLE attendance_records ADD COLUMN activityFileSize INTEGER DEFAULT 0;");
+    } catch {}
+    try {
+      this.db.exec("ALTER TABLE attendance_records ADD COLUMN activityUploadedAt TEXT DEFAULT '';");
     } catch {}
 
     // Vérification : uniquement si la base de données est complètement vierge (0 classe)
@@ -2413,6 +2437,12 @@ for m in matieres:
         COALESCE(r.notes, '') as recordNotes,
         COALESCE(r.optionsJson, '[]') as optionsJson,
         COALESCE(r.score, 0) as score,
+        COALESCE(r.markedByStudentAt, '') as markedByStudentAt,
+        COALESCE(r.activityFileUrl, '') as activityFileUrl,
+        COALESCE(r.activityFileName, '') as activityFileName,
+        COALESCE(r.activityFileType, '') as activityFileType,
+        COALESCE(r.activityFileSize, 0) as activityFileSize,
+        COALESCE(r.activityUploadedAt, '') as activityUploadedAt,
         COALESCE(r.updatedAt, '') as updatedAt
       FROM students s
       LEFT JOIN attendance_records r ON r.studentId = s.id AND r.sessionId = ?
@@ -2436,6 +2466,12 @@ for m in matieres:
         optionsJson: String(r.optionsJson || '[]'),
         score: Number(r.score || 0),
         options: parsedOptions,
+        markedByStudentAt: r.markedByStudentAt ? String(r.markedByStudentAt) : undefined,
+        activityFileUrl: r.activityFileUrl ? String(r.activityFileUrl) : undefined,
+        activityFileName: r.activityFileName ? String(r.activityFileName) : undefined,
+        activityFileType: r.activityFileType ? String(r.activityFileType) : undefined,
+        activityFileSize: Number(r.activityFileSize || 0),
+        activityUploadedAt: r.activityUploadedAt ? String(r.activityUploadedAt) : undefined,
         updatedAt: r.updatedAt ? String(r.updatedAt) : new Date().toISOString(),
         studentName: `${r.firstName} ${r.lastName}`,
         studentNumber: String(r.studentNumber || ''),
@@ -2818,6 +2854,233 @@ for m in matieres:
       },
       history
     };
+  }
+
+  public getStudentTodayAttendance(studentId: string): {
+    date: string;
+    session: AttendanceSession | null;
+    record: AttendanceRecord | null;
+    hasMarkedToday: boolean;
+    markedAt?: string;
+  } {
+    const student = this.getStudentById(studentId);
+    if (!student) throw new Error('Élève introuvable');
+
+    const now = new Date();
+    const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+
+    const sessionRow = this.db.prepare(`
+      SELECT * FROM attendance_sessions
+      WHERE classId = ? AND date = ?
+      ORDER BY createdAt DESC
+      LIMIT 1
+    `).get(student.classId, today) as any;
+
+    if (!sessionRow) {
+      return {
+        date: today,
+        session: null,
+        record: null,
+        hasMarkedToday: false
+      };
+    }
+
+    const sessionDetails = this.getAttendanceSessionDetails(sessionRow.id);
+    const record = sessionDetails?.records?.find(r => r.studentId === studentId) || null;
+    const hasMarkedToday = Boolean(record && record.markedByStudentAt);
+
+    return {
+      date: today,
+      session: sessionDetails,
+      record,
+      hasMarkedToday,
+      markedAt: record?.markedByStudentAt || undefined
+    };
+  }
+
+  public markStudentPresenceToday(studentId: string): {
+    success: boolean;
+    session: AttendanceSession;
+    record: AttendanceRecord;
+    alreadyMarked: boolean;
+  } {
+    const student = this.getStudentById(studentId);
+    if (!student) throw new Error('Élève introuvable');
+
+    const now = new Date();
+    const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+    const nowIso = now.toISOString();
+
+    // Check if a session already exists for this class today
+    let sessionRow = this.db.prepare(`
+      SELECT * FROM attendance_sessions
+      WHERE classId = ? AND date = ?
+      ORDER BY createdAt DESC
+      LIMIT 1
+    `).get(student.classId, today) as any;
+
+    if (!sessionRow) {
+      const dateFormatted = new Intl.DateTimeFormat('fr-FR', {
+        weekday: 'long',
+        day: 'numeric',
+        month: 'long',
+        year: 'numeric'
+      }).format(now);
+      const title = `Séance du ${dateFormatted.charAt(0).toUpperCase() + dateFormatted.slice(1)}`;
+      const newSession = this.createAttendanceSession(student.classId, {
+        title,
+        date: today,
+        notes: 'Séance initialisée',
+        initialStatus: 'present'
+      });
+      sessionRow = { id: newSession.id };
+    }
+
+    // Check record
+    const recordRow = this.db.prepare(`
+      SELECT * FROM attendance_records
+      WHERE sessionId = ? AND studentId = ?
+    `).get(sessionRow.id, studentId) as any;
+
+    let alreadyMarked = false;
+    if (recordRow && recordRow.markedByStudentAt) {
+      alreadyMarked = true;
+    } else {
+      this.db.prepare(`
+        INSERT INTO attendance_records (id, sessionId, studentId, status, notes, optionsJson, score, markedByStudentAt, updatedAt)
+        VALUES (?, ?, ?, 'present', '', '[]', 0, ?, ?)
+        ON CONFLICT(sessionId, studentId) DO UPDATE SET
+          status = 'present',
+          markedByStudentAt = excluded.markedByStudentAt,
+          updatedAt = excluded.updatedAt
+      `).run(
+        `att-${sessionRow.id}-${studentId}`,
+        sessionRow.id,
+        studentId,
+        nowIso,
+        nowIso
+      );
+    }
+
+    const sessionDetails = this.getAttendanceSessionDetails(sessionRow.id)!;
+    const record = sessionDetails.records!.find(r => r.studentId === studentId)!;
+
+    return {
+      success: true,
+      session: sessionDetails,
+      record,
+      alreadyMarked
+    };
+  }
+
+  public uploadStudentActivityFile(studentId: string, fileData: {
+    fileUrl: string;
+    fileName: string;
+    fileType: string;
+    fileSize: number;
+  }): {
+    success: boolean;
+    record: AttendanceRecord;
+    session: AttendanceSession;
+  } {
+    const student = this.getStudentById(studentId);
+    if (!student) throw new Error('Élève introuvable');
+
+    const now = new Date();
+    const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+    const nowIso = now.toISOString();
+
+    let sessionRow = this.db.prepare(`
+      SELECT * FROM attendance_sessions
+      WHERE classId = ? AND date = ?
+      ORDER BY createdAt DESC
+      LIMIT 1
+    `).get(student.classId, today) as any;
+
+    if (!sessionRow) {
+      const dateFormatted = new Intl.DateTimeFormat('fr-FR', {
+        weekday: 'long',
+        day: 'numeric',
+        month: 'long',
+        year: 'numeric'
+      }).format(now);
+      const title = `Séance du ${dateFormatted.charAt(0).toUpperCase() + dateFormatted.slice(1)}`;
+      const newSession = this.createAttendanceSession(student.classId, {
+        title,
+        date: today,
+        notes: 'Séance initialisée',
+        initialStatus: 'present'
+      });
+      sessionRow = { id: newSession.id };
+    }
+
+    this.db.prepare(`
+      INSERT INTO attendance_records (
+        id, sessionId, studentId, status, notes, optionsJson, score,
+        activityFileUrl, activityFileName, activityFileType, activityFileSize, activityUploadedAt, updatedAt
+      )
+      VALUES (?, ?, ?, 'present', '', '[]', 0, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(sessionId, studentId) DO UPDATE SET
+        activityFileUrl = excluded.activityFileUrl,
+        activityFileName = excluded.activityFileName,
+        activityFileType = excluded.activityFileType,
+        activityFileSize = excluded.activityFileSize,
+        activityUploadedAt = excluded.activityUploadedAt,
+        updatedAt = excluded.updatedAt
+    `).run(
+      `att-${sessionRow.id}-${studentId}`,
+      sessionRow.id,
+      studentId,
+      fileData.fileUrl,
+      fileData.fileName,
+      fileData.fileType,
+      fileData.fileSize,
+      nowIso,
+      nowIso
+    );
+
+    const sessionDetails = this.getAttendanceSessionDetails(sessionRow.id)!;
+    const record = sessionDetails.records!.find(r => r.studentId === studentId)!;
+
+    return {
+      success: true,
+      record,
+      session: sessionDetails
+    };
+  }
+
+  public deleteStudentActivityFile(studentId: string): {
+    success: boolean;
+    record?: AttendanceRecord;
+  } {
+    const student = this.getStudentById(studentId);
+    if (!student) throw new Error('Élève introuvable');
+
+    const now = new Date();
+    const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+    const nowIso = now.toISOString();
+
+    const sessionRow = this.db.prepare(`
+      SELECT * FROM attendance_sessions
+      WHERE classId = ? AND date = ?
+      ORDER BY createdAt DESC
+      LIMIT 1
+    `).get(student.classId, today) as any;
+
+    if (!sessionRow) {
+      return { success: false };
+    }
+
+    this.db.prepare(`
+      UPDATE attendance_records
+      SET activityFileUrl = '', activityFileName = '', activityFileType = '', activityFileSize = 0, activityUploadedAt = '', updatedAt = ?
+      WHERE sessionId = ? AND studentId = ?
+    `).run(nowIso, sessionRow.id, studentId);
+
+    const sessionDetails = this.getAttendanceSessionDetails(sessionRow.id);
+    const record = sessionDetails?.records?.find(r => r.studentId === studentId);
+
+    return { success: true, record };
   }
 
   // ==========================================

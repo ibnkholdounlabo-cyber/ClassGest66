@@ -626,6 +626,59 @@ async function startServer() {
     }
   });
 
+  // Student: Get today's attendance status and activity file
+  app.get('/api/student/attendance/today', requireStudent, (req, res) => {
+    const studentId = (req as any).studentId;
+    try {
+      const data = db.getStudentTodayAttendance(studentId);
+      res.json(data);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Student: Mark presence for today's session (disabled after first click)
+  app.post('/api/student/attendance/mark-presence', requireStudent, (req, res) => {
+    const studentId = (req as any).studentId;
+    try {
+      const result = db.markStudentPresenceToday(studentId);
+      res.json(result);
+    } catch (err: any) {
+      res.status(400).json({ error: err.message });
+    }
+  });
+
+  // Student: Upload activity file for the session
+  app.post('/api/student/attendance/activity-file', requireStudent, (req, res) => {
+    const studentId = (req as any).studentId;
+    const { fileUrl, fileName, fileType, fileSize } = req.body;
+    if (!fileUrl || !fileName) {
+      return res.status(400).json({ error: 'Fichier requis' });
+    }
+    try {
+      const result = db.uploadStudentActivityFile(studentId, {
+        fileUrl,
+        fileName,
+        fileType: fileType || 'application/octet-stream',
+        fileSize: Number(fileSize || 0)
+      });
+      res.json(result);
+    } catch (err: any) {
+      res.status(400).json({ error: err.message });
+    }
+  });
+
+  // Student: Delete activity file for the session
+  app.delete('/api/student/attendance/activity-file', requireStudent, (req, res) => {
+    const studentId = (req as any).studentId;
+    try {
+      const result = db.deleteStudentActivityFile(studentId);
+      res.json(result);
+    } catch (err: any) {
+      res.status(400).json({ error: err.message });
+    }
+  });
+
   // ==========================================
   // COURSES ROUTES (COURS)
   // ==========================================
