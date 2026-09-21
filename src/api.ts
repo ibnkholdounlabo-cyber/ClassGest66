@@ -17,6 +17,7 @@ import {
   AttendanceRecord,
   AttendanceSession,
   StudentAttendanceSummary,
+  ClassDisciplineStats,
   SessionStatus
 } from './types';
 
@@ -324,6 +325,25 @@ export const api = {
     );
   },
 
+  async teacherUpdateStudent(
+    token: string,
+    studentId: string,
+    data: Partial<Student> & { password?: string }
+  ): Promise<Student> {
+    return safeFetchJson<Student>(
+      `${API_BASE}/teacher/students/${studentId}`,
+      {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`
+        },
+        body: JSON.stringify(data)
+      },
+      'Erreur lors de la modification des informations de l’élève'
+    );
+  },
+
   async teacherDeleteStudent(token: string, studentId: string) {
     return safeFetchJson(
       `${API_BASE}/teacher/students/${studentId}`,
@@ -357,6 +377,11 @@ export const api = {
       description?: string;
       content: string;
       resourceLink?: string;
+      fileUrl?: string;
+      fileName?: string;
+      fileType?: string;
+      fileSize?: number;
+      classIds?: string[];
     }
   ): Promise<Course> {
     return safeFetchJson<Course>(
@@ -370,6 +395,25 @@ export const api = {
         body: JSON.stringify(courseData)
       },
       'Erreur lors de la publication du cours'
+    );
+  },
+
+  async teacherUpdateCourse(
+    token: string,
+    courseId: string,
+    courseData: Partial<Course> & { classIds?: string[] }
+  ): Promise<Course> {
+    return safeFetchJson<Course>(
+      `${API_BASE}/teacher/courses/${courseId}`,
+      {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`
+        },
+        body: JSON.stringify(courseData)
+      },
+      'Erreur lors de la mise à jour du cours'
     );
   },
 
@@ -409,6 +453,7 @@ export const api = {
       minAccuracyPercent?: number;
       minWpm?: number;
       description?: string;
+      classIds?: string[];
     }
   ): Promise<TypingTest> {
     return safeFetchJson<TypingTest>(
@@ -422,6 +467,25 @@ export const api = {
         body: JSON.stringify(testData)
       },
       'Erreur lors de la création du test'
+    );
+  },
+
+  async teacherUpdateTest(
+    token: string,
+    testId: string,
+    testData: Partial<TypingTest> & { classIds?: string[] }
+  ): Promise<TypingTest> {
+    return safeFetchJson<TypingTest>(
+      `${API_BASE}/teacher/tests/${testId}`,
+      {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`
+        },
+        body: JSON.stringify(testData)
+      },
+      'Erreur lors de la mise à jour du test'
     );
   },
 
@@ -790,7 +854,13 @@ export const api = {
   async teacherSaveAttendanceRecords(
     token: string,
     sessionId: string,
-    records: Array<{ studentId: string; status: AttendanceStatus; notes?: string }>
+    records: Array<{
+      studentId: string;
+      status: AttendanceStatus;
+      notes?: string;
+      optionsJson?: string;
+      score?: number;
+    }>
   ): Promise<{ success: boolean; session: AttendanceSession & { records: AttendanceRecord[] } }> {
     return safeFetchJson<{ success: boolean; session: AttendanceSession & { records: AttendanceRecord[] } }>(
       `${API_BASE}/teacher/attendance/sessions/${sessionId}/records`,
@@ -825,6 +895,17 @@ export const api = {
       `${API_BASE}/teacher/classes/${classId}/attendance/summary`,
       { headers: { Authorization: `Bearer ${token}` } },
       'Impossible de charger le récapitulatif des présences'
+    );
+  },
+
+  async teacherGetDisciplineSummary(
+    token: string,
+    classId: string
+  ): Promise<ClassDisciplineStats> {
+    return safeFetchJson<ClassDisciplineStats>(
+      `${API_BASE}/teacher/classes/${classId}/attendance/discipline-summary`,
+      { headers: { Authorization: `Bearer ${token}` } },
+      'Impossible de charger les statistiques de discipline et de comportement'
     );
   },
 

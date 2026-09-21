@@ -10,7 +10,8 @@ async function startServer() {
   const TOKEN_SECRET = 'intranet_school_secure_token_secret_key_2024';
   const SESSION_DURATION_MS = 30 * 60 * 1000; // Limite stricte de durée de session : 30 minutes
 
-  app.use(express.json());
+  app.use(express.json({ limit: '50mb' }));
+  app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
   interface ActiveSession {
     role: 'teacher' | 'student';
@@ -615,6 +616,16 @@ async function startServer() {
     }
   });
 
+  // Get class discipline and behaviour statistics (options, score, incidents)
+  app.get('/api/teacher/classes/:classId/attendance/discipline-summary', requireTeacher, (req, res) => {
+    try {
+      const stats = db.getClassDisciplineSummary(req.params.classId);
+      res.json(stats);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   // ==========================================
   // COURSES ROUTES (COURS)
   // ==========================================
@@ -628,21 +639,36 @@ async function startServer() {
     }
   });
 
-  // Create course for a class (Teacher only)
+  // Create course for a class or multiple classes (Teacher only)
   app.post('/api/teacher/classes/:classId/courses', requireTeacher, (req, res) => {
-    const { title, category, description, content, resourceLink } = req.body;
-    if (!title || !category || !content) {
-      return res.status(400).json({ error: 'Titre, catégorie et contenu sont obligatoires' });
+    const { title, category, description, content, resourceLink, fileUrl, fileName, fileType, fileSize, classIds } = req.body;
+    if (!title || !category) {
+      return res.status(400).json({ error: 'Titre et catégorie sont obligatoires' });
     }
     try {
       const course = db.createCourse(req.params.classId, {
         title,
         category,
         description,
-        content,
-        resourceLink
+        content: content || '',
+        resourceLink,
+        fileUrl,
+        fileName,
+        fileType,
+        fileSize,
+        classIds: Array.isArray(classIds) ? classIds : undefined
       });
       res.status(201).json(course);
+    } catch (err: any) {
+      res.status(400).json({ error: err.message });
+    }
+  });
+
+  // Update course (Teacher only)
+  app.put('/api/teacher/courses/:id', requireTeacher, (req, res) => {
+    try {
+      const updated = db.updateCourse(req.params.id, req.body);
+      res.json(updated);
     } catch (err: any) {
       res.status(400).json({ error: err.message });
     }
@@ -674,9 +700,9 @@ async function startServer() {
     }
   });
 
-  // Create test for a class (Teacher only)
+  // Create test for a class or multiple classes (Teacher only)
   app.post('/api/teacher/classes/:classId/tests', requireTeacher, (req, res) => {
-    const { title, theme, level, timeLimitSeconds, targetText, minAccuracyPercent, minWpm, description } = req.body;
+    const { title, theme, level, timeLimitSeconds, targetText, minAccuracyPercent, minWpm, description, classIds } = req.body;
     if (!title || !theme || !level || !timeLimitSeconds || !targetText) {
       return res.status(400).json({ error: 'Champs obligatoires manquants (titre, thème, niveau, temps limite, texte cible)' });
     }
@@ -689,9 +715,20 @@ async function startServer() {
         targetText,
         minAccuracyPercent: minAccuracyPercent ? Number(minAccuracyPercent) : 80,
         minWpm: minWpm ? Number(minWpm) : 15,
-        description
+        description,
+        classIds: Array.isArray(classIds) ? classIds : undefined
       });
       res.status(201).json(test);
+    } catch (err: any) {
+      res.status(400).json({ error: err.message });
+    }
+  });
+
+  // Update test (Teacher only)
+  app.put('/api/teacher/tests/:id', requireTeacher, (req, res) => {
+    try {
+      const updated = db.updateTest(req.params.id, req.body);
+      res.json(updated);
     } catch (err: any) {
       res.status(400).json({ error: err.message });
     }

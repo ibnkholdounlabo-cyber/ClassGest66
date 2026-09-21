@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
   Calendar,
   Clock,
@@ -24,10 +24,99 @@ import {
   ArrowUpDown,
   ArrowUp,
   ArrowDown,
-  X
+  X,
+  BookX,
+  UserX,
+  Briefcase,
+  MessageSquare,
+  Award,
+  ThumbsUp,
+  SlidersHorizontal
 } from 'lucide-react';
 import { api } from '../api';
-import { AttendanceRecord, AttendanceSession, AttendanceStatus, Student, StudentAttendanceSummary } from '../types';
+import {
+  AttendanceRecord,
+  AttendanceSession,
+  AttendanceStatus,
+  Student,
+  StudentAttendanceSummary
+} from '../types';
+
+export interface DisciplineOptionDef {
+  key: string;
+  label: string;
+  shortLabel: string;
+  defaultDelta: number;
+  badgeColor: string;
+  activeColor: string;
+  iconType: 'cahier' | 'exclu' | 'materiel' | 'devoir' | 'bavardage' | 'bonus' | 'serieux';
+}
+
+export const DISCIPLINE_OPTIONS: DisciplineOptionDef[] = [
+  {
+    key: 'absence_cahier',
+    label: "Absence de cahier d'élève",
+    shortLabel: 'Sans cahier',
+    defaultDelta: -1,
+    badgeColor: 'bg-rose-50 text-rose-700 border-rose-200',
+    activeColor: 'bg-rose-600 text-white border-rose-700 shadow-xs',
+    iconType: 'cahier'
+  },
+  {
+    key: 'exclu',
+    label: 'Élève exclu de cours',
+    shortLabel: 'Exclu',
+    defaultDelta: -3,
+    badgeColor: 'bg-red-50 text-red-700 border-red-200',
+    activeColor: 'bg-red-600 text-white border-red-700 shadow-xs',
+    iconType: 'exclu'
+  },
+  {
+    key: 'oubli_materiel',
+    label: 'Oubli de matériel',
+    shortLabel: 'Sans matériel',
+    defaultDelta: -1,
+    badgeColor: 'bg-amber-50 text-amber-800 border-amber-200',
+    activeColor: 'bg-amber-600 text-white border-amber-700 shadow-xs',
+    iconType: 'materiel'
+  },
+  {
+    key: 'travail_non_fait',
+    label: 'Travail non fait',
+    shortLabel: 'Travail non fait',
+    defaultDelta: -2,
+    badgeColor: 'bg-orange-50 text-orange-800 border-orange-200',
+    activeColor: 'bg-orange-600 text-white border-orange-700 shadow-xs',
+    iconType: 'devoir'
+  },
+  {
+    key: 'bavardage',
+    label: 'Bavardage / Perturbation',
+    shortLabel: 'Bavardage',
+    defaultDelta: -1,
+    badgeColor: 'bg-yellow-50 text-yellow-800 border-yellow-200',
+    activeColor: 'bg-yellow-600 text-white border-yellow-700 shadow-xs',
+    iconType: 'bavardage'
+  },
+  {
+    key: 'participation',
+    label: 'Bonne participation (+)',
+    shortLabel: '+ Participation',
+    defaultDelta: 1,
+    badgeColor: 'bg-emerald-50 text-emerald-800 border-emerald-200',
+    activeColor: 'bg-emerald-600 text-white border-emerald-700 shadow-xs',
+    iconType: 'bonus'
+  },
+  {
+    key: 'travail_serieux',
+    label: 'Travail remarquable (+)',
+    shortLabel: '+ Remarquable',
+    defaultDelta: 2,
+    badgeColor: 'bg-teal-50 text-teal-800 border-teal-200',
+    activeColor: 'bg-teal-600 text-white border-teal-700 shadow-xs',
+    iconType: 'serieux'
+  }
+];
 
 interface TeacherAttendanceSectionProps {
   classId: string;
@@ -43,7 +132,7 @@ export const TeacherAttendanceSection: React.FC<TeacherAttendanceSectionProps> =
   token,
   students
 }) => {
-  const [activeTab, setActiveTab] = useState<'sessions' | 'summary'>('sessions');
+  const [activeTab, setActiveTab] = useState<'sessions' | 'summary' | 'discipline'>('sessions');
 
   // Sessions list
   const [sessions, setSessions] = useState<AttendanceSession[]>([]);
@@ -55,9 +144,16 @@ export const TeacherAttendanceSection: React.FC<TeacherAttendanceSectionProps> =
   // Active Session Details & Roll Call
   const [currentSession, setCurrentSession] = useState<(AttendanceSession & { records: AttendanceRecord[] }) | null>(null);
   const [loadingDetails, setLoadingDetails] = useState(false);
-  const [recordEdits, setRecordEdits] = useState<Record<string, { status: AttendanceStatus; notes: string }>>({});
+  const [recordEdits, setRecordEdits] = useState<Record<string, {
+    status: AttendanceStatus;
+    notes: string;
+    options: string[];
+    score: number;
+  }>>({});
   const [savingRecords, setSavingRecords] = useState(false);
   const [saveSuccessMessage, setSaveSuccessMessage] = useState('');
+
+  // Roll call filters
   const [rollSearch, setRollSearch] = useState('');
   const [rollStatusFilter, setRollStatusFilter] = useState<'all' | AttendanceStatus>('all');
   const [rollRepeatingFilter, setRollRepeatingFilter] = useState<'all' | 'nouveau' | 'redoublant'>('all');
@@ -73,12 +169,18 @@ export const TeacherAttendanceSection: React.FC<TeacherAttendanceSectionProps> =
   const [newInitialStatus, setNewInitialStatus] = useState<AttendanceStatus>('present');
   const [creatingSession, setCreatingSession] = useState(false);
 
-  // Class Summary
+  // Class Attendance Summary (Tab 2)
   const [summaryData, setSummaryData] = useState<{ totalSessions: number; studentSummaries: StudentAttendanceSummary[] } | null>(null);
   const [loadingSummary, setLoadingSummary] = useState(false);
   const [summarySearch, setSummarySearch] = useState('');
   const [summaryFilterRepeating, setSummaryFilterRepeating] = useState<'all' | 'nouveau' | 'redoublant'>('all');
   const [summarySortBy, setSummarySortBy] = useState<'rate-desc' | 'rate-asc' | 'name-asc' | 'absences-desc' | 'lates-desc'>('name-asc');
+
+  // Discipline Summary (Tab 3)
+  const [disciplineData, setDisciplineData] = useState<any | null>(null);
+  const [loadingDiscipline, setLoadingDiscipline] = useState(false);
+  const [disciplineSearch, setDisciplineSearch] = useState('');
+  const [disciplineSort, setDisciplineSort] = useState<'score-asc' | 'score-desc' | 'name-asc' | 'exclu-desc' | 'cahier-desc'>('score-asc');
 
   // Load sessions on mount or when class changes
   useEffect(() => {
@@ -86,6 +188,8 @@ export const TeacherAttendanceSection: React.FC<TeacherAttendanceSectionProps> =
       loadSessions();
       if (activeTab === 'summary') {
         loadSummary();
+      } else if (activeTab === 'discipline') {
+        loadDiscipline();
       }
     }
   }, [classId]);
@@ -93,6 +197,8 @@ export const TeacherAttendanceSection: React.FC<TeacherAttendanceSectionProps> =
   useEffect(() => {
     if (activeTab === 'summary' && classId) {
       loadSummary();
+    } else if (activeTab === 'discipline' && classId) {
+      loadDiscipline();
     }
   }, [activeTab]);
 
@@ -101,9 +207,10 @@ export const TeacherAttendanceSection: React.FC<TeacherAttendanceSectionProps> =
     try {
       const data = await api.teacherGetAttendanceSessions(token, classId);
       setSessions(data);
-      // If we had a selected session, reload it, or select the first one if none
       if (selectedSessionId) {
         loadSessionDetails(selectedSessionId);
+      } else if (data.length > 0) {
+        loadSessionDetails(data[0].id);
       }
     } catch (err: any) {
       console.error('Error loading attendance sessions:', err);
@@ -119,12 +226,22 @@ export const TeacherAttendanceSection: React.FC<TeacherAttendanceSectionProps> =
       setCurrentSession(data);
       setSelectedSessionId(sessionId);
 
-      // Initialize records edits map
-      const map: Record<string, { status: AttendanceStatus; notes: string }> = {};
+      // Initialize records edits map with options and scores
+      const map: Record<string, { status: AttendanceStatus; notes: string; options: string[]; score: number }> = {};
       data.records.forEach((rec) => {
+        let opts: string[] = [];
+        if (rec.optionsJson) {
+          try {
+            opts = JSON.parse(rec.optionsJson);
+          } catch (e) {
+            opts = [];
+          }
+        }
         map[rec.studentId] = {
           status: rec.status,
-          notes: rec.notes || ''
+          notes: rec.notes || '',
+          options: opts,
+          score: rec.score ?? 0
         };
       });
       setRecordEdits(map);
@@ -144,6 +261,18 @@ export const TeacherAttendanceSection: React.FC<TeacherAttendanceSectionProps> =
       console.error('Error loading class attendance summary:', err);
     } finally {
       setLoadingSummary(false);
+    }
+  };
+
+  const loadDiscipline = async () => {
+    setLoadingDiscipline(true);
+    try {
+      const data = await api.teacherGetDisciplineSummary(token, classId);
+      setDisciplineData(data);
+    } catch (err: any) {
+      console.error('Error loading discipline summary:', err);
+    } finally {
+      setLoadingDiscipline(false);
     }
   };
 
@@ -179,13 +308,20 @@ export const TeacherAttendanceSection: React.FC<TeacherAttendanceSectionProps> =
       const recordsToSave = Object.entries(recordEdits).map(([studentId, item]) => ({
         studentId,
         status: item.status,
-        notes: item.notes
+        notes: item.notes,
+        options: item.options,
+        optionsJson: JSON.stringify(item.options),
+        score: item.score
       }));
+
       const res = await api.teacherSaveAttendanceRecords(token, currentSession.id, recordsToSave);
       setCurrentSession(res.session);
-      setSaveSuccessMessage('Feuille d’appel enregistrée avec succès');
+      setSaveSuccessMessage('Feuille d’appel, options disciplinaires et scores enregistrés avec succès !');
       setTimeout(() => setSaveSuccessMessage(''), 4000);
       loadSessions(); // refresh counts
+      if (activeTab === 'discipline') {
+        loadDiscipline();
+      }
     } catch (err: any) {
       alert(err.message || 'Erreur lors de l’enregistrement de l’appel');
     } finally {
@@ -226,41 +362,71 @@ export const TeacherAttendanceSection: React.FC<TeacherAttendanceSectionProps> =
     setRecordEdits((prev) => ({
       ...prev,
       [studentId]: {
-        ...(prev[studentId] || { notes: '' }),
+        ...(prev[studentId] || { notes: '', options: [], score: 0 }),
         status
       }
     }));
+  };
+
+  const toggleDisciplineOption = (studentId: string, optionKey: string) => {
+    setRecordEdits((prev) => {
+      const current = prev[studentId] || { status: 'present', notes: '', options: [], score: 0 };
+      const hasOpt = current.options.includes(optionKey);
+      const newOpts = hasOpt
+        ? current.options.filter((k) => k !== optionKey)
+        : [...current.options, optionKey];
+
+      // Automatically recalculate suggested score change based on delta
+      const optionDef = DISCIPLINE_OPTIONS.find((o) => o.key === optionKey);
+      const delta = optionDef ? optionDef.defaultDelta : 0;
+      const newScore = hasOpt ? current.score - delta : current.score + delta;
+
+      // If marked 'exclu', can also mark absent or keep status
+      return {
+        ...prev,
+        [studentId]: {
+          ...current,
+          options: newOpts,
+          score: newScore
+        }
+      };
+    });
+  };
+
+  const adjustStudentScore = (studentId: string, delta: number) => {
+    setRecordEdits((prev) => {
+      const current = prev[studentId] || { status: 'present', notes: '', options: [], score: 0 };
+      return {
+        ...prev,
+        [studentId]: {
+          ...current,
+          score: (current.score || 0) + delta
+        }
+      };
+    });
   };
 
   const updateSingleRecordNote = (studentId: string, notes: string) => {
     setRecordEdits((prev) => ({
       ...prev,
       [studentId]: {
-        ...(prev[studentId] || { status: 'present' }),
+        ...(prev[studentId] || { status: 'present', options: [], score: 0 }),
         notes
       }
     }));
   };
 
-  // Compute live stats for current session in editor
-  const liveStats = React.useMemo(() => {
-    const list = Object.values(recordEdits);
-    const total = list.length;
-    const present = list.filter((r) => r.status === 'present').length;
-    const absent = list.filter((r) => r.status === 'absent').length;
-    const late = list.filter((r) => r.status === 'late').length;
-    const excused = list.filter((r) => r.status === 'excused').length;
-    const rate = total > 0 ? Math.round((present / total) * 100) : 0;
-    return { total, present, absent, late, excused, rate };
-  }, [recordEdits]);
-
-  // Filtered & sorted sessions list
-  const filteredSessions = React.useMemo(() => {
+  // Filter & Sort Sessions
+  const filteredSessions = useMemo(() => {
     return sessions
       .filter((s) => {
-        const q = sessionSearch.toLowerCase().trim();
-        if (!q) return true;
-        return s.title.toLowerCase().includes(q) || s.date.includes(q);
+        if (!sessionSearch) return true;
+        const q = sessionSearch.toLowerCase();
+        return (
+          s.title.toLowerCase().includes(q) ||
+          s.date.includes(q) ||
+          (s.notes && s.notes.toLowerCase().includes(q))
+        );
       })
       .sort((a, b) => {
         if (sessionSort === 'date-desc') return new Date(b.date).getTime() - new Date(a.date).getTime();
@@ -270,58 +436,96 @@ export const TeacherAttendanceSection: React.FC<TeacherAttendanceSectionProps> =
       });
   }, [sessions, sessionSearch, sessionSort]);
 
-  // Filtered & sorted records in the active roll call session
-  const filteredRollRecords = React.useMemo(() => {
+  // Filter & Sort Roll Call Students
+  const filteredRollRecords = useMemo(() => {
     if (!currentSession) return [];
+
     return currentSession.records
       .filter((rec) => {
-        const q = rollSearch.toLowerCase().trim();
-        const matchesSearch = !q || (
-          (rec.studentName || '').toLowerCase().includes(q) ||
-          (rec.studentNumber && rec.studentNumber.toLowerCase().includes(q))
-        );
-        const currentStatus = recordEdits[rec.studentId]?.status ?? rec.status;
-        const matchesStatus = rollStatusFilter === 'all' || currentStatus === rollStatusFilter;
-        let matchesRepeating = true;
-        if (rollRepeatingFilter === 'nouveau') matchesRepeating = !rec.isRepeating;
-        if (rollRepeatingFilter === 'redoublant') matchesRepeating = !!rec.isRepeating;
-
-        return matchesSearch && matchesStatus && matchesRepeating;
-      })
-      .sort((a, b) => {
-        if (rollSort === 'name-asc') return (a.studentName || '').localeCompare(b.studentName || '', 'fr');
-        if (rollSort === 'status') {
-          const statusOrder: Record<AttendanceStatus, number> = { absent: 1, late: 2, excused: 3, present: 4 };
-          const statA = recordEdits[a.studentId]?.status ?? a.status;
-          const statB = recordEdits[b.studentId]?.status ?? b.status;
-          return statusOrder[statA] - statusOrder[statB];
+        const edit = recordEdits[rec.studentId] || { status: rec.status, notes: '' };
+        if (rollStatusFilter !== 'all' && edit.status !== rollStatusFilter) {
+          return false;
         }
-        return 0;
-      });
-  }, [currentSession, rollSearch, rollStatusFilter, rollRepeatingFilter, rollSort, recordEdits]);
+        if (rollRepeatingFilter === 'nouveau' && rec.isRepeating) return false;
+        if (rollRepeatingFilter === 'redoublant' && !rec.isRepeating) return false;
 
-  // Filtered & sorted summaries for the summary tab
-  const filteredSummaries = React.useMemo(() => {
-    if (!summaryData) return [];
-    return summaryData.studentSummaries
-      .filter((s) => {
-        const fullName = `${s.firstName} ${s.lastName}`.toLowerCase();
-        const num = (s.studentNumber || '').toLowerCase();
-        const matchSearch = fullName.includes(summarySearch.toLowerCase()) || num.includes(summarySearch.toLowerCase());
-        if (!matchSearch) return false;
-        if (summaryFilterRepeating === 'nouveau') return !s.isRepeating;
-        if (summaryFilterRepeating === 'redoublant') return s.isRepeating;
+        if (rollSearch) {
+          const q = rollSearch.toLowerCase();
+          const matchName = (rec.studentName || '').toLowerCase().includes(q);
+          const matchNum = (rec.studentNumber || '').toLowerCase().includes(q);
+          const matchNote = edit.notes.toLowerCase().includes(q);
+          if (!matchName && !matchNum && !matchNote) return false;
+        }
+
         return true;
       })
       .sort((a, b) => {
-        if (summarySortBy === 'rate-desc') return b.attendanceRate - a.attendanceRate;
-        if (summarySortBy === 'rate-asc') return a.attendanceRate - b.attendanceRate;
+        if (rollSort === 'name-asc') {
+          return (a.studentName || '').localeCompare(b.studentName || '', 'fr');
+        }
+        if (rollSort === 'status') {
+          const editA = recordEdits[a.studentId]?.status || a.status;
+          const editB = recordEdits[b.studentId]?.status || b.status;
+          const order = { absent: 1, late: 2, excused: 3, present: 4 };
+          return order[editA] - order[editB];
+        }
+        return 0; // initial order
+      });
+  }, [currentSession, recordEdits, rollStatusFilter, rollRepeatingFilter, rollSearch, rollSort]);
+
+  // Filter & Sort Summary
+  const filteredSummaries = useMemo(() => {
+    if (!summaryData?.studentSummaries) return [];
+
+    return summaryData.studentSummaries
+      .filter((s) => {
+        if (summaryFilterRepeating === 'nouveau' && s.isRepeating) return false;
+        if (summaryFilterRepeating === 'redoublant' && !s.isRepeating) return false;
+
+        if (summarySearch) {
+          const q = summarySearch.toLowerCase();
+          const fullName = `${s.lastName} ${s.firstName}`.toLowerCase();
+          const matchNum = s.studentNumber.toLowerCase().includes(q);
+          if (!fullName.includes(q) && !matchNum) return false;
+        }
+
+        return true;
+      })
+      .sort((a, b) => {
+        const rateA = a.attendanceRate ?? a.presenceRate ?? 0;
+        const rateB = b.attendanceRate ?? b.presenceRate ?? 0;
+        if (summarySortBy === 'rate-desc') return rateB - rateA;
+        if (summarySortBy === 'rate-asc') return rateA - rateB;
         if (summarySortBy === 'absences-desc') return b.absentCount - a.absentCount;
         if (summarySortBy === 'lates-desc') return b.lateCount - a.lateCount;
         if (summarySortBy === 'name-asc') return `${a.lastName} ${a.firstName}`.localeCompare(`${b.lastName} ${b.firstName}`, 'fr');
         return 0;
       });
   }, [summaryData, summarySearch, summaryFilterRepeating, summarySortBy]);
+
+  // Filter & Sort Discipline
+  const filteredDisciplineStudents = useMemo(() => {
+    if (!disciplineData?.studentSummaries) return [];
+
+    return disciplineData.studentSummaries
+      .filter((s: any) => {
+        if (disciplineSearch) {
+          const q = disciplineSearch.toLowerCase();
+          const fullName = `${s.lastName} ${s.firstName}`.toLowerCase();
+          const matchNum = s.studentNumber?.toLowerCase().includes(q);
+          if (!fullName.includes(q) && !matchNum) return false;
+        }
+        return true;
+      })
+      .sort((a: any, b: any) => {
+        if (disciplineSort === 'score-asc') return a.totalScore - b.totalScore;
+        if (disciplineSort === 'score-desc') return b.totalScore - a.totalScore;
+        if (disciplineSort === 'exclu-desc') return (b.optionCounts?.exclu || 0) - (a.optionCounts?.exclu || 0);
+        if (disciplineSort === 'cahier-desc') return (b.optionCounts?.absence_cahier || 0) - (a.optionCounts?.absence_cahier || 0);
+        if (disciplineSort === 'name-asc') return `${a.lastName} ${a.firstName}`.localeCompare(`${b.lastName} ${b.firstName}`, 'fr');
+        return 0;
+      });
+  }, [disciplineData, disciplineSearch, disciplineSort]);
 
   return (
     <div className="space-y-6">
@@ -334,40 +538,52 @@ export const TeacherAttendanceSection: React.FC<TeacherAttendanceSectionProps> =
             </span>
             <div>
               <h2 className="text-base font-bold text-slate-900">
-                Gestion des Présences & Appel - {className || 'Classe'}
+                Gestion des Présences & Discipline - {className || 'Classe'}
               </h2>
               <p className="text-xs text-slate-500">
-                Feuilles de présence par séance, calendrier scolaire et suivi des absences / retards
+                Appel en classe, options disciplinaires (cahier, exclusion...), scoring (+/-) et statistiques comportementales
               </p>
             </div>
           </div>
         </div>
 
         {/* View Toggle Tabs */}
-        <div className="flex items-center gap-2 bg-slate-100 p-1 rounded-xl">
+        <div className="flex items-center gap-1.5 bg-slate-100 p-1 rounded-xl">
           <button
             type="button"
             onClick={() => setActiveTab('sessions')}
-            className={`px-3.5 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-all cursor-pointer ${
+            className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-all cursor-pointer ${
               activeTab === 'sessions'
                 ? 'bg-white text-indigo-700 shadow-sm'
                 : 'text-slate-600 hover:text-slate-900'
             }`}
           >
             <Calendar className="w-3.5 h-3.5" />
-            <span>Séances & Feuilles d'Appel</span>
+            <span>Séances & Appel</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => setActiveTab('discipline')}
+            className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-all cursor-pointer ${
+              activeTab === 'discipline'
+                ? 'bg-white text-rose-700 shadow-sm'
+                : 'text-slate-600 hover:text-slate-900'
+            }`}
+          >
+            <ShieldAlert className="w-3.5 h-3.5" />
+            <span>Discipline & Scores</span>
           </button>
           <button
             type="button"
             onClick={() => setActiveTab('summary')}
-            className={`px-3.5 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-all cursor-pointer ${
+            className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-all cursor-pointer ${
               activeTab === 'summary'
                 ? 'bg-white text-indigo-700 shadow-sm'
                 : 'text-slate-600 hover:text-slate-900'
             }`}
           >
             <BarChart3 className="w-3.5 h-3.5" />
-            <span>Récapitulatif & Taux</span>
+            <span>Taux de Présence</span>
           </button>
         </div>
       </div>
@@ -378,51 +594,42 @@ export const TeacherAttendanceSection: React.FC<TeacherAttendanceSectionProps> =
           {/* Left Column: List of Sessions */}
           <div className="lg:col-span-4 space-y-3">
             <div className="flex items-center justify-between">
-              <span className="text-xs font-bold text-slate-700 uppercase tracking-wider">
-                Calendrier des séances ({filteredSessions.length}{filteredSessions.length !== sessions.length ? ` / ${sessions.length}` : ''})
-              </span>
+              <h3 className="font-bold text-xs uppercase tracking-wider text-slate-700">
+                Séances de cours ({filteredSessions.length})
+              </h3>
               <button
                 type="button"
                 onClick={() => setShowNewSessionModal(true)}
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold shadow-sm transition-colors cursor-pointer"
+                className="inline-flex items-center gap-1 px-2.5 py-1 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs font-semibold shadow-xs transition-colors cursor-pointer"
               >
                 <Plus className="w-3.5 h-3.5" />
                 <span>Nouvelle séance</span>
               </button>
             </div>
 
-            {/* Filter and Sort for Sessions */}
-            {sessions.length > 0 && (
-              <div className="p-2.5 bg-slate-50 rounded-xl border border-slate-200 flex flex-wrap items-center gap-2 text-xs">
-                <div className="relative flex-1 min-w-[130px]">
-                  <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2" />
-                  <input
-                    type="text"
-                    placeholder="Filtrer titre ou date..."
-                    value={sessionSearch}
-                    onChange={(e) => setSessionSearch(e.target.value)}
-                    className="w-full h-7 pl-8 pr-2 bg-white border border-slate-200 rounded-lg text-xs focus:outline-none focus:ring-1 focus:ring-indigo-500"
-                  />
-                </div>
-                <select
-                  value={sessionSort}
-                  onChange={(e) => setSessionSort(e.target.value as any)}
-                  className="h-7 px-2 bg-white border border-slate-200 rounded-lg text-xs font-medium text-slate-700"
-                >
-                  <option value="date-desc">Plus récente</option>
-                  <option value="date-asc">Plus ancienne</option>
-                  <option value="title-asc">Titre (A → Z)</option>
-                </select>
-                {sessionSearch && (
-                  <button
-                    onClick={() => setSessionSearch('')}
-                    className="text-[11px] text-slate-500 hover:text-slate-800 font-semibold cursor-pointer"
-                  >
-                    Effacer
-                  </button>
-                )}
+            {/* Sessions search & sort */}
+            <div className="flex items-center gap-2">
+              <div className="relative flex-1">
+                <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-2.5" />
+                <input
+                  type="text"
+                  placeholder="Rechercher une séance..."
+                  value={sessionSearch}
+                  onChange={(e) => setSessionSearch(e.target.value)}
+                  className="w-full h-8 pl-8 pr-3 bg-white border border-slate-200 rounded-xl text-xs focus:ring-1 focus:ring-indigo-500 focus:outline-none"
+                />
               </div>
-            )}
+
+              <select
+                value={sessionSort}
+                onChange={(e) => setSessionSort(e.target.value as any)}
+                className="h-8 px-2 bg-white border border-slate-200 rounded-xl text-xs font-medium text-slate-700"
+              >
+                <option value="date-desc">Récent d'abord</option>
+                <option value="date-asc">Ancien d'abord</option>
+                <option value="title-asc">Titre (A-Z)</option>
+              </select>
+            </div>
 
             {loadingSessions ? (
               <div className="bg-white p-6 rounded-2xl border border-slate-200 text-center text-xs text-slate-400">
@@ -437,7 +644,7 @@ export const TeacherAttendanceSection: React.FC<TeacherAttendanceSectionProps> =
                 <div>
                   <p className="text-xs font-semibold text-slate-800">Aucune séance enregistrée</p>
                   <p className="text-[11px] text-slate-500 mt-0.5">
-                    Créez une première séance pour effectuer l'appel de la classe.
+                    Créez une première séance pour effectuer l'appel et cocher la discipline.
                   </p>
                 </div>
                 <button
@@ -446,16 +653,6 @@ export const TeacherAttendanceSection: React.FC<TeacherAttendanceSectionProps> =
                   className="inline-flex items-center gap-1 px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs font-semibold cursor-pointer"
                 >
                   <Plus className="w-3.5 h-3.5" /> Créer une séance
-                </button>
-              </div>
-            ) : filteredSessions.length === 0 ? (
-              <div className="bg-white p-6 rounded-2xl border border-slate-200 text-center text-xs text-slate-500 space-y-2">
-                <p className="font-semibold">Aucune séance trouvée</p>
-                <button
-                  onClick={() => setSessionSearch('')}
-                  className="text-indigo-600 font-semibold hover:underline"
-                >
-                  Effacer le filtre
                 </button>
               </div>
             ) : (
@@ -474,27 +671,26 @@ export const TeacherAttendanceSection: React.FC<TeacherAttendanceSectionProps> =
                       onClick={() => loadSessionDetails(sess.id)}
                       className={`p-3.5 rounded-2xl border transition-all cursor-pointer ${
                         isSelected
-                          ? 'bg-indigo-50/80 border-indigo-300 shadow-sm ring-1 ring-indigo-200'
-                          : 'bg-white hover:bg-slate-50 border-slate-200'
+                          ? 'bg-indigo-50/70 border-indigo-300 shadow-sm ring-1 ring-indigo-300'
+                          : 'bg-white border-slate-200 hover:border-slate-300'
                       }`}
                     >
                       <div className="flex items-start justify-between gap-2">
                         <div>
-                          <div className="flex items-center gap-1.5">
-                            <span className="font-bold text-xs text-slate-900 line-clamp-1">{sess.title}</span>
+                          <div className="flex items-center gap-2">
+                            <span className="font-bold text-xs sm:text-sm text-slate-900">
+                              {sess.title}
+                            </span>
                           </div>
-                          <div className="flex items-center gap-2 mt-1 text-[11px] text-slate-500">
-                            <span className="font-medium text-indigo-700 capitalize">{dateFormatted}</span>
+                          <p className="text-[11px] text-slate-500 mt-0.5 flex items-center gap-1">
+                            <Calendar className="w-3 h-3 text-slate-400" />
+                            <span>{dateFormatted}</span>
                             {sess.startTime && (
-                              <>
-                                <span>•</span>
-                                <span className="flex items-center gap-1">
-                                  <Clock className="w-3 h-3 text-slate-400" />
-                                  {sess.startTime} {sess.endTime ? `- ${sess.endTime}` : ''}
-                                </span>
-                              </>
+                              <span className="text-slate-400">
+                                • {sess.startTime} - {sess.endTime}
+                              </span>
                             )}
-                          </div>
+                          </p>
                         </div>
 
                         <button
@@ -584,14 +780,13 @@ export const TeacherAttendanceSection: React.FC<TeacherAttendanceSectionProps> =
                     <button
                       type="button"
                       onClick={() => window.print()}
-                      className="no-print p-2 rounded-xl text-slate-500 hover:text-slate-800 bg-white hover:bg-slate-100 border border-slate-200 text-xs font-semibold transition-colors cursor-pointer"
+                      className="p-2 rounded-xl text-slate-500 hover:text-slate-800 bg-white hover:bg-slate-100 border border-slate-200 text-xs font-semibold transition-colors cursor-pointer"
                       title="Imprimer la feuille d'appel"
                     >
                       <Printer className="w-4 h-4" />
                     </button>
                     <button
                       type="button"
-                      id="btn-save-attendance-records"
                       onClick={handleSaveRecords}
                       disabled={savingRecords}
                       className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white text-xs font-bold shadow-md shadow-emerald-600/20 transition-all cursor-pointer"
@@ -601,136 +796,78 @@ export const TeacherAttendanceSection: React.FC<TeacherAttendanceSectionProps> =
                       ) : (
                         <Save className="w-3.5 h-3.5" />
                       )}
-                      <span>Enregistrer l'appel</span>
+                      <span>Enregistrer l’appel</span>
                     </button>
                   </div>
                 </div>
 
-                {/* Success feedback toast */}
+                {/* Save Feedback Banner */}
                 {saveSuccessMessage && (
-                  <div className="bg-emerald-50 border-b border-emerald-200 px-4 py-2 text-xs font-semibold text-emerald-800 flex items-center gap-2">
+                  <div className="p-3 bg-emerald-50 border-b border-emerald-200 text-emerald-800 text-xs font-semibold flex items-center gap-2">
                     <CheckCircle2 className="w-4 h-4 text-emerald-600" />
                     <span>{saveSuccessMessage}</span>
                   </div>
                 )}
 
-                {/* Live Stats Bar & Batch Actions */}
-                <div className="p-3.5 bg-slate-50 border-b border-slate-200 flex flex-wrap items-center justify-between gap-3 text-xs">
-                  {/* Live Stats */}
-                  <div className="flex items-center gap-3">
-                    <span className="font-bold text-slate-700">Taux : <span className="text-indigo-600">{liveStats.rate}%</span></span>
-                    <span className="text-slate-300">|</span>
-                    <span className="inline-flex items-center gap-1 text-emerald-700 font-semibold">
-                      <span className="w-2 h-2 rounded-full bg-emerald-500"></span>
-                      {liveStats.present} Présents
-                    </span>
-                    <span className="inline-flex items-center gap-1 text-rose-700 font-semibold">
-                      <span className="w-2 h-2 rounded-full bg-rose-500"></span>
-                      {liveStats.absent} Absents
-                    </span>
-                    <span className="inline-flex items-center gap-1 text-amber-700 font-semibold">
-                      <span className="w-2 h-2 rounded-full bg-amber-500"></span>
-                      {liveStats.late} Retards
-                    </span>
-                    <span className="inline-flex items-center gap-1 text-sky-700 font-semibold">
-                      <span className="w-2 h-2 rounded-full bg-sky-500"></span>
-                      {liveStats.excused} Excusés
-                    </span>
-                  </div>
-
-                  {/* Batch buttons */}
+                {/* Batch Actions Toolbar */}
+                <div className="p-3 bg-white border-b border-slate-200 flex flex-wrap items-center justify-between gap-3 text-xs">
                   <div className="flex items-center gap-1.5">
-                    <span className="text-[11px] text-slate-400">Actions rapides :</span>
+                    <span className="text-slate-500 font-medium">Tout marquer :</span>
                     <button
                       type="button"
                       onClick={() => handleSetAllStatus('present')}
-                      className="px-2 py-1 bg-white hover:bg-emerald-50 border border-slate-200 hover:border-emerald-300 rounded text-[11px] font-semibold text-emerald-700 transition-colors cursor-pointer"
+                      className="px-2 py-1 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 rounded-lg font-semibold text-[11px] border border-emerald-200 cursor-pointer"
                     >
-                      Tout Présent
+                      Tous Présents
                     </button>
                     <button
                       type="button"
                       onClick={() => handleSetAllStatus('absent')}
-                      className="px-2 py-1 bg-white hover:bg-rose-50 border border-slate-200 hover:border-rose-300 rounded text-[11px] font-semibold text-rose-700 transition-colors cursor-pointer"
+                      className="px-2 py-1 bg-rose-50 text-rose-700 hover:bg-rose-100 rounded-lg font-semibold text-[11px] border border-rose-200 cursor-pointer"
                     >
-                      Tout Absent
+                      Tous Absents
                     </button>
+                  </div>
+
+                  {/* Filter toolbar */}
+                  <div className="flex items-center gap-2">
+                    <div className="relative">
+                      <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2 top-2" />
+                      <input
+                        type="text"
+                        placeholder="Filtrer un élève..."
+                        value={rollSearch}
+                        onChange={(e) => setRollSearch(e.target.value)}
+                        className="h-7 pl-7 pr-2.5 bg-slate-50 border border-slate-200 rounded-lg text-xs w-36 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                      />
+                    </div>
+
+                    <select
+                      value={rollStatusFilter}
+                      onChange={(e) => setRollStatusFilter(e.target.value as any)}
+                      className="h-7 px-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-medium text-slate-700"
+                    >
+                      <option value="all">Tous statuts</option>
+                      <option value="present">Présents</option>
+                      <option value="absent">Absents</option>
+                      <option value="late">Retards</option>
+                      <option value="excused">Excusés</option>
+                    </select>
+
+                    <select
+                      value={rollRepeatingFilter}
+                      onChange={(e) => setRollRepeatingFilter(e.target.value as any)}
+                      className="h-7 px-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-medium text-slate-700"
+                    >
+                      <option value="all">Tous profils</option>
+                      <option value="nouveau">Nouveaux</option>
+                      <option value="redoublant">Redoublants</option>
+                    </select>
                   </div>
                 </div>
 
-                {/* Roll Call Filter & Sort Toolbar */}
-                {currentSession.records.length > 0 && (
-                  <div className="p-3 bg-white border-b border-slate-200 flex flex-wrap items-center justify-between gap-2.5 text-xs">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <div className="relative">
-                        <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2" />
-                        <input
-                          type="text"
-                          placeholder="Rechercher élève ou N°..."
-                          value={rollSearch}
-                          onChange={(e) => setRollSearch(e.target.value)}
-                          className="h-7 pl-8 pr-2.5 bg-slate-50 border border-slate-200 rounded-lg text-xs w-44 focus:outline-none focus:ring-1 focus:ring-indigo-500"
-                        />
-                      </div>
-
-                      <select
-                        value={rollStatusFilter}
-                        onChange={(e) => setRollStatusFilter(e.target.value as any)}
-                        className="h-7 px-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-medium text-slate-700"
-                      >
-                        <option value="all">Tous statuts</option>
-                        <option value="present">Présents</option>
-                        <option value="absent">Absents</option>
-                        <option value="late">Retards</option>
-                        <option value="excused">Excusés</option>
-                      </select>
-
-                      <select
-                        value={rollRepeatingFilter}
-                        onChange={(e) => setRollRepeatingFilter(e.target.value as any)}
-                        className="h-7 px-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-medium text-slate-700"
-                      >
-                        <option value="all">Tous profils</option>
-                        <option value="nouveau">Nouveaux</option>
-                        <option value="redoublant">Redoublants</option>
-                      </select>
-
-                      <div className="flex items-center gap-1">
-                        <ArrowUpDown className="w-3 h-3 text-slate-400" />
-                        <span className="text-[11px] text-slate-500">Trier :</span>
-                        <select
-                          value={rollSort}
-                          onChange={(e) => setRollSort(e.target.value as any)}
-                          className="h-7 px-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-medium text-slate-700"
-                        >
-                          <option value="order">Ordre initial</option>
-                          <option value="name-asc">Nom (A → Z)</option>
-                          <option value="status">Par statut</option>
-                        </select>
-                      </div>
-
-                      {(rollSearch || rollStatusFilter !== 'all' || rollRepeatingFilter !== 'all') && (
-                        <button
-                          onClick={() => {
-                            setRollSearch('');
-                            setRollStatusFilter('all');
-                            setRollRepeatingFilter('all');
-                          }}
-                          className="text-[11px] text-slate-500 hover:text-slate-800 font-semibold cursor-pointer"
-                        >
-                          Effacer filtres
-                        </button>
-                      )}
-                    </div>
-
-                    <span className="text-[11px] text-slate-500 font-medium">
-                      {filteredRollRecords.length} / {currentSession.records.length} élève{currentSession.records.length > 1 ? 's' : ''}
-                    </span>
-                  </div>
-                )}
-
-                {/* Roll Call Students Table */}
-                <div className="divide-y divide-slate-100 max-h-[550px] overflow-y-auto">
+                {/* Roll Call Students List */}
+                <div className="divide-y divide-slate-100 max-h-[580px] overflow-y-auto">
                   {currentSession.records.length === 0 ? (
                     <div className="p-8 text-center text-slate-400 text-xs">
                       Aucun élève dans cette classe. Ajoutez d'abord des élèves à la classe.
@@ -739,117 +876,177 @@ export const TeacherAttendanceSection: React.FC<TeacherAttendanceSectionProps> =
                     <div className="p-8 text-center bg-slate-50 text-slate-500 text-xs space-y-2">
                       <Search className="w-6 h-6 text-slate-400 mx-auto" />
                       <p className="font-semibold">Aucun élève ne correspond aux critères de filtre</p>
-                      <button
-                        onClick={() => {
-                          setRollSearch('');
-                          setRollStatusFilter('all');
-                          setRollRepeatingFilter('all');
-                        }}
-                        className="text-indigo-600 font-semibold hover:underline"
-                      >
-                        Réinitialiser les filtres
-                      </button>
                     </div>
                   ) : (
                     filteredRollRecords.map((rec, index) => {
-                      const edit = recordEdits[rec.studentId] || { status: rec.status, notes: '' };
+                      const edit = recordEdits[rec.studentId] || {
+                        status: rec.status,
+                        notes: '',
+                        options: [],
+                        score: 0
+                      };
                       const status = edit.status;
+                      const score = edit.score || 0;
                       const isRepeating = rec.isRepeating;
 
                       return (
                         <div
                           key={rec.studentId}
-                          className="p-3.5 sm:px-4 hover:bg-slate-50/80 transition-colors flex flex-col sm:flex-row sm:items-center justify-between gap-3"
+                          className="p-3.5 hover:bg-slate-50/80 transition-colors space-y-2.5"
                         >
-                          {/* Student Info */}
-                          <div className="flex items-center gap-3 min-w-[200px]">
-                            <span className="text-xs font-mono text-slate-400 w-5 text-right">{index + 1}.</span>
-                            <div>
-                              <div className="flex items-center gap-2">
-                                <span className="font-bold text-xs sm:text-sm text-slate-900">
-                                  {rec.studentName}
+                          {/* Row 1: Student info & Status Buttons */}
+                          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                            <div className="flex items-center gap-2.5 min-w-[200px]">
+                              <span className="text-xs font-mono text-slate-400 w-5 text-right">{index + 1}.</span>
+                              <div>
+                                <div className="flex items-center gap-2">
+                                  <span className="font-bold text-xs sm:text-sm text-slate-900">
+                                    {rec.studentName}
+                                  </span>
+                                  {isRepeating ? (
+                                    <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-100 text-amber-800 border border-amber-200">
+                                      Redoublant
+                                    </span>
+                                  ) : (
+                                    <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-800 border border-emerald-200">
+                                      Nouveau
+                                    </span>
+                                  )}
+                                </div>
+                                <span className="text-[11px] text-slate-500 font-mono">
+                                  N° {rec.studentNumber}
                                 </span>
-                                {/* Nouveau / Redoublant Badge */}
-                                {isRepeating ? (
-                                  <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-100 text-amber-800 border border-amber-200">
-                                    Redoublant
-                                  </span>
-                                ) : (
-                                  <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-800 border border-emerald-200">
-                                    Nouveau
-                                  </span>
-                                )}
                               </div>
-                              <span className="text-[11px] text-slate-500 font-mono">
-                                N° {rec.studentNumber}
-                              </span>
+                            </div>
+
+                            {/* Status Picker Buttons */}
+                            <div className="flex items-center gap-1">
+                              <button
+                                type="button"
+                                onClick={() => updateSingleRecordStatus(rec.studentId, 'present')}
+                                className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-all cursor-pointer flex items-center gap-1 ${
+                                  status === 'present'
+                                    ? 'bg-emerald-600 text-white shadow-xs ring-2 ring-emerald-300'
+                                    : 'bg-slate-100 hover:bg-slate-200 text-slate-600'
+                                }`}
+                              >
+                                <CheckCircle2 className="w-3 h-3" />
+                                <span>Présent</span>
+                              </button>
+
+                              <button
+                                type="button"
+                                onClick={() => updateSingleRecordStatus(rec.studentId, 'absent')}
+                                className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-all cursor-pointer flex items-center gap-1 ${
+                                  status === 'absent'
+                                    ? 'bg-rose-600 text-white shadow-xs ring-2 ring-rose-300'
+                                    : 'bg-slate-100 hover:bg-slate-200 text-slate-600'
+                                }`}
+                              >
+                                <XCircle className="w-3 h-3" />
+                                <span>Absent</span>
+                              </button>
+
+                              <button
+                                type="button"
+                                onClick={() => updateSingleRecordStatus(rec.studentId, 'late')}
+                                className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-all cursor-pointer flex items-center gap-1 ${
+                                  status === 'late'
+                                    ? 'bg-amber-500 text-white shadow-xs ring-2 ring-amber-300'
+                                    : 'bg-slate-100 hover:bg-slate-200 text-slate-600'
+                                }`}
+                              >
+                                <Clock className="w-3 h-3" />
+                                <span>Retard</span>
+                              </button>
+
+                              <button
+                                type="button"
+                                onClick={() => updateSingleRecordStatus(rec.studentId, 'excused')}
+                                className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-all cursor-pointer flex items-center gap-1 ${
+                                  status === 'excused'
+                                    ? 'bg-sky-600 text-white shadow-xs ring-2 ring-sky-300'
+                                    : 'bg-slate-100 hover:bg-slate-200 text-slate-600'
+                                }`}
+                              >
+                                <FileText className="w-3 h-3" />
+                                <span>Excusé</span>
+                              </button>
                             </div>
                           </div>
 
-                          {/* Status Picker Buttons */}
-                          <div className="flex items-center gap-1.5">
-                            <button
-                              type="button"
-                              onClick={() => updateSingleRecordStatus(rec.studentId, 'present')}
-                              className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center gap-1 ${
-                                status === 'present'
-                                  ? 'bg-emerald-600 text-white shadow-sm ring-2 ring-emerald-300'
-                                  : 'bg-slate-100 hover:bg-slate-200 text-slate-600'
-                              }`}
-                            >
-                              <CheckCircle2 className="w-3.5 h-3.5" />
-                              <span>Présent</span>
-                            </button>
+                          {/* Row 2: Discipline Options & Scoring & Observations */}
+                          <div className="bg-slate-50/70 p-2.5 rounded-xl border border-slate-200/80 flex flex-col md:flex-row md:items-center justify-between gap-2.5 text-xs">
+                            {/* Discipline Checkboxes / Pills */}
+                            <div className="flex flex-wrap items-center gap-1.5">
+                              <span className="text-[11px] font-bold text-slate-500 mr-1 flex items-center gap-1">
+                                <ShieldAlert className="w-3 h-3 text-slate-400" />
+                                Options :
+                              </span>
+                              {DISCIPLINE_OPTIONS.map((opt) => {
+                                const isChecked = edit.options.includes(opt.key);
+                                return (
+                                  <button
+                                    key={opt.key}
+                                    type="button"
+                                    onClick={() => toggleDisciplineOption(rec.studentId, opt.key)}
+                                    title={`${opt.label} (${opt.defaultDelta > 0 ? `+${opt.defaultDelta}` : opt.defaultDelta} pt)`}
+                                    className={`px-2 py-0.5 rounded-md text-[11px] font-semibold border transition-all cursor-pointer ${
+                                      isChecked
+                                        ? opt.activeColor
+                                        : `${opt.badgeColor} hover:opacity-80`
+                                    }`}
+                                  >
+                                    {isChecked ? '✓ ' : ''}
+                                    {opt.shortLabel} ({opt.defaultDelta > 0 ? `+${opt.defaultDelta}` : opt.defaultDelta})
+                                  </button>
+                                );
+                              })}
+                            </div>
 
-                            <button
-                              type="button"
-                              onClick={() => updateSingleRecordStatus(rec.studentId, 'absent')}
-                              className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center gap-1 ${
-                                status === 'absent'
-                                  ? 'bg-rose-600 text-white shadow-sm ring-2 ring-rose-300'
-                                  : 'bg-slate-100 hover:bg-slate-200 text-slate-600'
-                              }`}
-                            >
-                              <XCircle className="w-3.5 h-3.5" />
-                              <span>Absent</span>
-                            </button>
+                            {/* Score (+/-) and Quick Note Input */}
+                            <div className="flex items-center gap-2 self-end md:self-auto">
+                              {/* Score Pill and Buttons */}
+                              <div className="flex items-center gap-1 bg-white border border-slate-200 px-2 py-0.5 rounded-lg">
+                                <span className="text-[10px] text-slate-400 font-bold uppercase">Score</span>
+                                <button
+                                  type="button"
+                                  onClick={() => adjustStudentScore(rec.studentId, -1)}
+                                  className="w-4 h-4 rounded bg-slate-100 hover:bg-rose-100 text-slate-600 hover:text-rose-700 font-bold flex items-center justify-center cursor-pointer"
+                                  title="Diminuer le score (-1)"
+                                >
+                                  -
+                                </button>
+                                <span
+                                  className={`text-xs font-extrabold min-w-[20px] text-center ${
+                                    score > 0
+                                      ? 'text-emerald-700'
+                                      : score < 0
+                                      ? 'text-rose-700'
+                                      : 'text-slate-600'
+                                  }`}
+                                >
+                                  {score > 0 ? `+${score}` : score}
+                                </span>
+                                <button
+                                  type="button"
+                                  onClick={() => adjustStudentScore(rec.studentId, +1)}
+                                  className="w-4 h-4 rounded bg-slate-100 hover:bg-emerald-100 text-slate-600 hover:text-emerald-700 font-bold flex items-center justify-center cursor-pointer"
+                                  title="Augmenter le score (+1)"
+                                >
+                                  +
+                                </button>
+                              </div>
 
-                            <button
-                              type="button"
-                              onClick={() => updateSingleRecordStatus(rec.studentId, 'late')}
-                              className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center gap-1 ${
-                                status === 'late'
-                                  ? 'bg-amber-500 text-white shadow-sm ring-2 ring-amber-300'
-                                  : 'bg-slate-100 hover:bg-slate-200 text-slate-600'
-                              }`}
-                            >
-                              <Clock className="w-3.5 h-3.5" />
-                              <span>Retard</span>
-                            </button>
-
-                            <button
-                              type="button"
-                              onClick={() => updateSingleRecordStatus(rec.studentId, 'excused')}
-                              className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center gap-1 ${
-                                status === 'excused'
-                                  ? 'bg-sky-600 text-white shadow-sm ring-2 ring-sky-300'
-                                  : 'bg-slate-100 hover:bg-slate-200 text-slate-600'
-                              }`}
-                            >
-                              <FileText className="w-3.5 h-3.5" />
-                              <span>Excusé</span>
-                            </button>
-                          </div>
-
-                          {/* Quick note input */}
-                          <div className="sm:w-44">
-                            <input
-                              type="text"
-                              value={edit.notes}
-                              onChange={(e) => updateSingleRecordNote(rec.studentId, e.target.value)}
-                              placeholder="Motif / observation..."
-                              className="w-full text-xs px-2.5 py-1 bg-slate-50 border border-slate-200 rounded-lg focus:bg-white focus:ring-1 focus:ring-indigo-500 text-slate-700"
-                            />
+                              {/* Note Input */}
+                              <input
+                                type="text"
+                                value={edit.notes}
+                                onChange={(e) => updateSingleRecordNote(rec.studentId, e.target.value)}
+                                placeholder="Observations (ex: bavarde au fond, cahier oublié...)"
+                                className="text-xs px-2.5 py-1 bg-white border border-slate-200 rounded-lg focus:ring-1 focus:ring-indigo-500 text-slate-700 w-48 md:w-56"
+                              />
+                            </div>
                           </div>
                         </div>
                       );
@@ -862,7 +1059,195 @@ export const TeacherAttendanceSection: React.FC<TeacherAttendanceSectionProps> =
         </div>
       )}
 
-      {/* TAB 2: CLASS ATTENDANCE SUMMARY & RATES */}
+      {/* TAB 2: DISCIPLINE & BEHAVIOR STATISTICS */}
+      {activeTab === 'discipline' && (
+        <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-6 space-y-6">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+            <div>
+              <h3 className="font-bold text-base text-slate-900 flex items-center gap-2">
+                <ShieldAlert className="w-5 h-5 text-rose-600" />
+                <span>Statistiques & Bilan Disciplinaire de la Classe</span>
+              </h3>
+              <p className="text-xs text-slate-500 mt-0.5">
+                Suivi des sanctions (absences de cahiers, exclusions, oublis de matériel) et valorisation du travail sérieux
+              </p>
+            </div>
+
+            {/* Filter & Sort */}
+            <div className="flex items-center gap-2">
+              <div className="relative">
+                <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-2.5" />
+                <input
+                  type="text"
+                  placeholder="Chercher un élève..."
+                  value={disciplineSearch}
+                  onChange={(e) => setDisciplineSearch(e.target.value)}
+                  className="h-8 pl-8 pr-3 bg-slate-50 border border-slate-200 rounded-xl text-xs w-44 focus:bg-white focus:outline-none"
+                />
+              </div>
+
+              <select
+                value={disciplineSort}
+                onChange={(e) => setDisciplineSort(e.target.value as any)}
+                className="h-8 px-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-medium text-slate-700"
+              >
+                <option value="score-asc">Score croissant (sanctions d'abord)</option>
+                <option value="score-desc">Score décroissant (bonus d'abord)</option>
+                <option value="exclu-desc">Nombre d'exclusions</option>
+                <option value="cahier-desc">Absences de cahier</option>
+                <option value="name-asc">Nom (A-Z)</option>
+              </select>
+            </div>
+          </div>
+
+          {/* Global Discipline Cards */}
+          {disciplineData && (
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
+              <div className="p-3.5 rounded-xl bg-rose-50 border border-rose-200">
+                <span className="text-[10px] font-bold uppercase text-rose-800 block">Sans Cahier</span>
+                <span className="text-2xl font-black text-rose-900">
+                  {disciplineData.globalCounts?.absence_cahier || 0}
+                </span>
+                <span className="text-[10px] text-rose-600 block mt-0.5">incidents signalés</span>
+              </div>
+
+              <div className="p-3.5 rounded-xl bg-red-50 border border-red-200">
+                <span className="text-[10px] font-bold uppercase text-red-800 block">Exclusions</span>
+                <span className="text-2xl font-black text-red-900">
+                  {disciplineData.globalCounts?.exclu || 0}
+                </span>
+                <span className="text-[10px] text-red-600 block mt-0.5">élèves exclus</span>
+              </div>
+
+              <div className="p-3.5 rounded-xl bg-amber-50 border border-amber-200">
+                <span className="text-[10px] font-bold uppercase text-amber-800 block">Sans Matériel</span>
+                <span className="text-2xl font-black text-amber-900">
+                  {disciplineData.globalCounts?.oubli_materiel || 0}
+                </span>
+                <span className="text-[10px] text-amber-600 block mt-0.5">oublis enregistrés</span>
+              </div>
+
+              <div className="p-3.5 rounded-xl bg-orange-50 border border-orange-200">
+                <span className="text-[10px] font-bold uppercase text-orange-800 block">Travail non fait</span>
+                <span className="text-2xl font-black text-orange-900">
+                  {disciplineData.globalCounts?.travail_non_fait || 0}
+                </span>
+                <span className="text-[10px] text-orange-600 block mt-0.5">manquements</span>
+              </div>
+
+              <div className="p-3.5 rounded-xl bg-yellow-50 border border-yellow-200">
+                <span className="text-[10px] font-bold uppercase text-yellow-800 block">Bavardages</span>
+                <span className="text-2xl font-black text-yellow-900">
+                  {disciplineData.globalCounts?.bavardage || 0}
+                </span>
+                <span className="text-[10px] text-yellow-600 block mt-0.5">remarques</span>
+              </div>
+
+              <div className="p-3.5 rounded-xl bg-emerald-50 border border-emerald-200">
+                <span className="text-[10px] font-bold uppercase text-emerald-800 block">Bonus / Sérieux</span>
+                <span className="text-2xl font-black text-emerald-900">
+                  {(disciplineData.globalCounts?.participation || 0) + (disciplineData.globalCounts?.travail_serieux || 0)}
+                </span>
+                <span className="text-[10px] text-emerald-600 block mt-0.5">valorisations</span>
+              </div>
+            </div>
+          )}
+
+          {/* Table by Student */}
+          {loadingDiscipline ? (
+            <div className="p-12 text-center text-slate-400 text-xs">
+              <span className="inline-block w-5 h-5 border-2 border-indigo-600 border-t-transparent rounded-full animate-spin mb-2"></span>
+              <p>Chargement des données de discipline...</p>
+            </div>
+          ) : filteredDisciplineStudents.length === 0 ? (
+            <div className="p-8 text-center text-slate-400 text-xs bg-slate-50 rounded-xl">
+              Aucune donnée de comportement trouvée. Effectuez l’appel et cochez des options pour visualiser les statistiques.
+            </div>
+          ) : (
+            <div className="overflow-x-auto border border-slate-200 rounded-xl">
+              <table className="w-full text-left text-xs">
+                <thead className="bg-slate-50 text-slate-600 uppercase tracking-wider text-[10px] border-b border-slate-200">
+                  <tr>
+                    <th className="py-2.5 px-3">Élève</th>
+                    <th className="py-2.5 px-2 text-center">Profil</th>
+                    <th className="py-2.5 px-2 text-center text-rose-700">Sans Cahier</th>
+                    <th className="py-2.5 px-2 text-center text-red-700">Exclu</th>
+                    <th className="py-2.5 px-2 text-center text-amber-700">Sans Matériel</th>
+                    <th className="py-2.5 px-2 text-center text-orange-700">Travail non fait</th>
+                    <th className="py-2.5 px-2 text-center text-yellow-700">Bavardage</th>
+                    <th className="py-2.5 px-2 text-center text-emerald-700">Bonus (+)</th>
+                    <th className="py-2.5 px-3 text-center">Score Net</th>
+                    <th className="py-2.5 px-3">Dernière remarque</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {filteredDisciplineStudents.map((std: any) => {
+                    const counts = std.optionCounts || {};
+                    const score = std.totalScore || 0;
+                    return (
+                      <tr key={std.id} className="hover:bg-slate-50">
+                        <td className="py-2.5 px-3 font-bold text-slate-900">
+                          {std.lastName} {std.firstName}
+                          <span className="text-[10px] font-mono text-slate-400 block font-normal">
+                            N° {std.studentNumber}
+                          </span>
+                        </td>
+                        <td className="py-2.5 px-2 text-center">
+                          {std.isRepeating ? (
+                            <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-100 text-amber-800">
+                              Redoublant
+                            </span>
+                          ) : (
+                            <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-emerald-100 text-emerald-800">
+                              Nouveau
+                            </span>
+                          )}
+                        </td>
+                        <td className="py-2.5 px-2 text-center font-bold text-rose-700">
+                          {counts.absence_cahier || 0}
+                        </td>
+                        <td className="py-2.5 px-2 text-center font-bold text-red-700">
+                          {counts.exclu || 0}
+                        </td>
+                        <td className="py-2.5 px-2 text-center font-bold text-amber-700">
+                          {counts.oubli_materiel || 0}
+                        </td>
+                        <td className="py-2.5 px-2 text-center font-bold text-orange-700">
+                          {counts.travail_non_fait || 0}
+                        </td>
+                        <td className="py-2.5 px-2 text-center font-bold text-yellow-700">
+                          {counts.bavardage || 0}
+                        </td>
+                        <td className="py-2.5 px-2 text-center font-bold text-emerald-700">
+                          {(counts.participation || 0) + (counts.travail_serieux || 0)}
+                        </td>
+                        <td className="py-2.5 px-3 text-center">
+                          <span
+                            className={`px-2 py-0.5 rounded-full text-xs font-black ${
+                              score > 0
+                                ? 'bg-emerald-100 text-emerald-800'
+                                : score < 0
+                                ? 'bg-rose-100 text-rose-800'
+                                : 'bg-slate-100 text-slate-700'
+                            }`}
+                          >
+                            {score > 0 ? `+${score}` : score}
+                          </span>
+                        </td>
+                        <td className="py-2.5 px-3 text-[11px] text-slate-500 italic max-w-xs truncate">
+                          {std.lastNotes || '—'}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* TAB 3: ATTENDANCE RATES & SUMMARY */}
       {activeTab === 'summary' && (
         <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-6 space-y-4">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
@@ -877,185 +1262,122 @@ export const TeacherAttendanceSection: React.FC<TeacherAttendanceSectionProps> =
 
             {/* Filters */}
             <div className="flex flex-wrap items-center gap-2">
-              {/* Search */}
               <div className="relative">
-                <Search className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-2.5" />
                 <input
                   type="text"
+                  placeholder="Chercher un élève..."
                   value={summarySearch}
                   onChange={(e) => setSummarySearch(e.target.value)}
-                  placeholder="Rechercher un élève..."
-                  className="pl-8 pr-3 py-1.5 text-xs bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-indigo-500"
+                  className="h-8 pl-8 pr-3 bg-slate-50 border border-slate-200 rounded-xl text-xs w-44 focus:bg-white focus:outline-none"
                 />
               </div>
 
-              {/* Nouveau vs Redoublant filter */}
               <select
                 value={summaryFilterRepeating}
-                onChange={(e: any) => setSummaryFilterRepeating(e.target.value)}
-                className="py-1.5 px-3 text-xs bg-slate-50 border border-slate-200 rounded-xl font-medium text-slate-700"
+                onChange={(e) => setSummaryFilterRepeating(e.target.value as any)}
+                className="h-8 px-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-medium text-slate-700"
               >
                 <option value="all">Tous profils</option>
-                <option value="nouveau">Nouveaux uniquement</option>
-                <option value="redoublant">Redoublants uniquement</option>
+                <option value="nouveau">Nouveaux</option>
+                <option value="redoublant">Redoublants</option>
               </select>
 
-              {/* Sort by */}
-              <div className="flex items-center gap-1">
-                <ArrowUpDown className="w-3.5 h-3.5 text-slate-400" />
-                <select
-                  value={summarySortBy}
-                  onChange={(e: any) => setSummarySortBy(e.target.value)}
-                  className="py-1.5 px-3 text-xs bg-slate-50 border border-slate-200 rounded-xl font-medium text-slate-700"
-                >
-                  <option value="name-asc">Nom (A → Z)</option>
-                  <option value="rate-desc">Taux le plus élevé</option>
-                  <option value="rate-asc">Taux le plus faible</option>
-                  <option value="absences-desc">Plus d'absences</option>
-                  <option value="lates-desc">Plus de retards</option>
-                </select>
-              </div>
-
-              {(summarySearch || summaryFilterRepeating !== 'all') && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    setSummarySearch('');
-                    setSummaryFilterRepeating('all');
-                  }}
-                  className="text-xs text-slate-500 hover:text-slate-800 font-semibold cursor-pointer"
-                >
-                  Effacer
-                </button>
-              )}
-
-              <button
-                type="button"
-                onClick={() => window.print()}
-                className="p-2 rounded-xl text-slate-500 hover:text-slate-800 bg-slate-100 hover:bg-slate-200 text-xs font-semibold cursor-pointer"
-                title="Imprimer le bilan"
+              <select
+                value={summarySortBy}
+                onChange={(e) => setSummarySortBy(e.target.value as any)}
+                className="h-8 px-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-medium text-slate-700"
               >
-                <Printer className="w-4 h-4" />
-              </button>
+                <option value="name-asc">Nom (A-Z)</option>
+                <option value="rate-desc">Taux de présence (haut)</option>
+                <option value="rate-asc">Taux de présence (bas)</option>
+                <option value="absences-desc">Plus d'absences</option>
+                <option value="lates-desc">Plus de retards</option>
+              </select>
             </div>
           </div>
 
           {loadingSummary ? (
             <div className="p-12 text-center text-slate-400 text-xs">
               <span className="inline-block w-5 h-5 border-2 border-indigo-600 border-t-transparent rounded-full animate-spin mb-2"></span>
-              <p>Calcul des statistiques de présence...</p>
+              <p>Calcul des statistiques en cours...</p>
             </div>
           ) : filteredSummaries.length === 0 ? (
-            <div className="p-8 text-center text-slate-400 text-xs">
-              Aucun élève trouvé ou aucune donnée de présence pour le moment.
+            <div className="p-8 text-center text-slate-400 text-xs bg-slate-50 rounded-xl">
+              Aucune donnée de présence trouvée.
             </div>
           ) : (
-            <div className="overflow-x-auto border border-slate-100 rounded-xl">
+            <div className="overflow-x-auto border border-slate-200 rounded-xl">
               <table className="w-full text-left text-xs">
-                <thead className="bg-slate-50 text-slate-600 font-bold uppercase tracking-wider text-[10px] border-b border-slate-200 select-none">
+                <thead className="bg-slate-50 text-slate-600 uppercase tracking-wider text-[10px] border-b border-slate-200">
                   <tr>
-                    <th
-                      onClick={() => setSummarySortBy('name-asc')}
-                      className="py-3 px-4 cursor-pointer hover:bg-slate-100 transition-colors"
-                    >
-                      <div className="flex items-center gap-1">
-                        <span>Élève</span>
-                        {summarySortBy === 'name-asc' ? <ArrowUp className="w-3 h-3 text-indigo-600" /> : <ArrowUpDown className="w-3 h-3 text-slate-400 opacity-60" />}
-                      </div>
-                    </th>
-                    <th className="py-3 px-4">Statut</th>
-                    <th className="py-3 px-4 text-center">Séances</th>
-                    <th className="py-3 px-4 text-center text-emerald-700">Présences</th>
-                    <th
-                      onClick={() => setSummarySortBy('absences-desc')}
-                      className="py-3 px-4 text-center text-rose-700 cursor-pointer hover:bg-slate-100 transition-colors"
-                    >
-                      <div className="flex items-center justify-center gap-1">
-                        <span>Absences</span>
-                        {summarySortBy === 'absences-desc' ? <ArrowDown className="w-3 h-3 text-rose-600" /> : <ArrowUpDown className="w-3 h-3 text-slate-400 opacity-60" />}
-                      </div>
-                    </th>
-                    <th
-                      onClick={() => setSummarySortBy('lates-desc')}
-                      className="py-3 px-4 text-center text-amber-700 cursor-pointer hover:bg-slate-100 transition-colors"
-                    >
-                      <div className="flex items-center justify-center gap-1">
-                        <span>Retards</span>
-                        {summarySortBy === 'lates-desc' ? <ArrowDown className="w-3 h-3 text-amber-600" /> : <ArrowUpDown className="w-3 h-3 text-slate-400 opacity-60" />}
-                      </div>
-                    </th>
-                    <th className="py-3 px-4 text-center text-sky-700">Excusés</th>
-                    <th
-                      onClick={() => setSummarySortBy(prev => prev === 'rate-desc' ? 'rate-asc' : 'rate-desc')}
-                      className="py-3 px-4 text-right cursor-pointer hover:bg-slate-100 transition-colors"
-                    >
-                      <div className="flex items-center justify-end gap-1">
-                        <span>Taux de présence</span>
-                        {summarySortBy === 'rate-desc' ? (
-                          <ArrowDown className="w-3 h-3 text-indigo-600" />
-                        ) : summarySortBy === 'rate-asc' ? (
-                          <ArrowUp className="w-3 h-3 text-indigo-600" />
-                        ) : (
-                          <ArrowUpDown className="w-3 h-3 text-slate-400 opacity-60" />
-                        )}
-                      </div>
-                    </th>
+                    <th className="py-2.5 px-4">Élève</th>
+                    <th className="py-2.5 px-3 text-center">Profil</th>
+                    <th className="py-2.5 px-3 text-center text-emerald-700">Présences</th>
+                    <th className="py-2.5 px-3 text-center text-rose-700">Absences</th>
+                    <th className="py-2.5 px-3 text-center text-amber-700">Retards</th>
+                    <th className="py-2.5 px-3 text-center text-sky-700">Excusés</th>
+                    <th className="py-2.5 px-4 text-right">Taux de Présence</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
-                  {filteredSummaries.map((s) => {
-                    const isGood = s.attendanceRate >= 85;
-                    const isMedium = s.attendanceRate >= 70 && s.attendanceRate < 85;
-                    const isAlert = s.attendanceRate < 70;
-
-                    return (
-                      <tr key={s.studentId} className="hover:bg-slate-50/70 transition-colors">
-                        <td className="py-3 px-4">
-                          <div className="font-bold text-slate-900">{s.firstName} {s.lastName}</div>
-                          <div className="text-[11px] text-slate-400 font-mono">N° {s.studentNumber}</div>
-                        </td>
-                        <td className="py-3 px-4">
-                          {s.isRepeating ? (
-                            <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-100 text-amber-800 border border-amber-200">
-                              Redoublant
-                            </span>
-                          ) : (
-                            <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-800 border border-emerald-200">
-                              Nouveau
-                            </span>
-                          )}
-                        </td>
-                        <td className="py-3 px-4 text-center font-medium text-slate-700">{s.totalSessions}</td>
-                        <td className="py-3 px-4 text-center font-bold text-emerald-700">{s.presentCount}</td>
-                        <td className="py-3 px-4 text-center font-bold text-rose-700">{s.absentCount}</td>
-                        <td className="py-3 px-4 text-center font-bold text-amber-700">{s.lateCount}</td>
-                        <td className="py-3 px-4 text-center font-bold text-sky-700">{s.excusedCount}</td>
-                        <td className="py-3 px-4 text-right">
-                          <div className="flex items-center justify-end gap-2">
-                            <div className="w-16 h-2 bg-slate-100 rounded-full overflow-hidden">
-                              <div
-                                className={`h-full rounded-full ${
-                                  isGood ? 'bg-emerald-500' : isMedium ? 'bg-amber-500' : 'bg-rose-500'
-                                }`}
-                                style={{ width: `${s.attendanceRate}%` }}
-                              ></div>
+                  {filteredSummaries.map((s) => (
+                    <tr key={s.studentId} className="hover:bg-slate-50">
+                      <td className="py-2.5 px-4 font-bold text-slate-900">
+                        {s.lastName} {s.firstName}
+                        <span className="text-[10px] font-mono text-slate-400 block font-normal">
+                          N° {s.studentNumber}
+                        </span>
+                      </td>
+                      <td className="py-2.5 px-3 text-center">
+                        {s.isRepeating ? (
+                          <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-amber-100 text-amber-800">
+                            Redoublant
+                          </span>
+                        ) : (
+                          <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-100 text-emerald-800">
+                            Nouveau
+                          </span>
+                        )}
+                      </td>
+                      <td className="py-2.5 px-3 text-center font-bold text-emerald-700">
+                        {s.presentCount}
+                      </td>
+                      <td className="py-2.5 px-3 text-center font-bold text-rose-700">
+                        {s.absentCount}
+                      </td>
+                      <td className="py-2.5 px-3 text-center font-bold text-amber-700">
+                        {s.lateCount}
+                      </td>
+                      <td className="py-2.5 px-3 text-center font-bold text-sky-700">
+                        {s.excusedCount}
+                      </td>
+                      <td className="py-2.5 px-4 text-right">
+                        {(() => {
+                          const rate = s.attendanceRate ?? s.presenceRate ?? 0;
+                          return (
+                            <div className="inline-flex items-center gap-2">
+                              <div className="w-20 bg-slate-200 rounded-full h-2 overflow-hidden">
+                                <div
+                                  className={`h-full ${
+                                    rate >= 85
+                                      ? 'bg-emerald-600'
+                                      : rate >= 70
+                                      ? 'bg-amber-500'
+                                      : 'bg-rose-600'
+                                  }`}
+                                  style={{ width: `${rate}%` }}
+                                />
+                              </div>
+                              <span className="font-bold text-slate-800 min-w-[40px] text-right">
+                                {rate}%
+                              </span>
                             </div>
-                            <span
-                              className={`font-bold px-2 py-0.5 rounded-full text-[11px] ${
-                                isGood
-                                  ? 'bg-emerald-50 text-emerald-700'
-                                  : isMedium
-                                  ? 'bg-amber-50 text-amber-700'
-                                  : 'bg-rose-50 text-rose-700'
-                              }`}
-                            >
-                              {s.attendanceRate}%
-                            </span>
-                          </div>
-                        </td>
-                      </tr>
-                    );
-                  })}
+                          );
+                        })()}
+                      </td>
+                    </tr>
+                  ))}
                 </tbody>
               </table>
             </div>
@@ -1063,44 +1385,39 @@ export const TeacherAttendanceSection: React.FC<TeacherAttendanceSectionProps> =
         </div>
       )}
 
-      {/* MODAL: NEW ATTENDANCE SESSION */}
+      {/* CREATE NEW SESSION MODAL */}
       {showNewSessionModal && (
-        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-white rounded-3xl shadow-xl border border-slate-200 max-w-md w-full p-6 space-y-4">
-            <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4 overflow-y-auto">
+          <div className="bg-white rounded-3xl shadow-2xl max-w-md w-full border border-slate-200 overflow-hidden my-6">
+            <div className="p-4 bg-slate-900 text-white flex items-center justify-between">
               <div className="flex items-center gap-2">
-                <span className="p-2 rounded-xl bg-indigo-50 text-indigo-700">
-                  <Calendar className="w-5 h-5" />
-                </span>
-                <h3 className="font-bold text-base text-slate-900">Nouvelle Séance d'Appel</h3>
+                <Calendar className="w-4 h-4 text-indigo-400" />
+                <h3 className="font-bold text-sm">Nouvelle séance de cours</h3>
               </div>
               <button
-                type="button"
                 onClick={() => setShowNewSessionModal(false)}
-                className="text-slate-400 hover:text-slate-600 text-sm font-semibold"
+                className="text-slate-400 hover:text-white"
               >
                 ✕
               </button>
             </div>
 
-            <form onSubmit={handleCreateSession} className="space-y-3.5 text-xs">
+            <form onSubmit={handleCreateSession} className="p-5 space-y-3.5 text-xs">
               <div>
                 <label className="block font-semibold text-slate-700 mb-1">
-                  Titre de la séance
+                  Intitulé de la séance
                 </label>
                 <input
                   type="text"
                   value={newTitle}
                   onChange={(e) => setNewTitle(e.target.value)}
-                  placeholder={`Séance du ${newDate}`}
+                  placeholder={`Ex: Séance du ${newDate}`}
                   className="w-full h-10 px-3 bg-slate-50 border border-slate-300 rounded-xl text-slate-900 font-medium text-xs focus:ring-2 focus:ring-indigo-500 focus:bg-white"
                 />
               </div>
 
               <div>
-                <label className="block font-semibold text-slate-700 mb-1">
-                  Date de la séance *
-                </label>
+                <label className="block font-semibold text-slate-700 mb-1">Date *</label>
                 <input
                   type="date"
                   required
@@ -1112,9 +1429,7 @@ export const TeacherAttendanceSection: React.FC<TeacherAttendanceSectionProps> =
 
               <div className="grid grid-cols-2 gap-2">
                 <div>
-                  <label className="block font-semibold text-slate-700 mb-1">
-                    Heure début
-                  </label>
+                  <label className="block font-semibold text-slate-700 mb-1">Heure début</label>
                   <input
                     type="time"
                     value={newStartTime}
@@ -1123,9 +1438,7 @@ export const TeacherAttendanceSection: React.FC<TeacherAttendanceSectionProps> =
                   />
                 </div>
                 <div>
-                  <label className="block font-semibold text-slate-700 mb-1">
-                    Heure fin
-                  </label>
+                  <label className="block font-semibold text-slate-700 mb-1">Heure fin</label>
                   <input
                     type="time"
                     value={newEndTime}

@@ -79,17 +79,23 @@ export interface SessionStatus {
 export interface Course {
   id: string;
   classId: string;
+  classIds?: string[];
   title: string;
   category: 'Word' | 'Excel' | 'Python' | 'Général';
   description?: string;
   content: string;
   resourceLink?: string;
+  fileUrl?: string;
+  fileName?: string;
+  fileType?: string;
+  fileSize?: number;
   createdAt: string;
 }
 
 export interface TypingTest {
   id: string;
   classId: string;
+  classIds?: string[];
   title: string;
   theme: 'Word' | 'Excel' | 'Python' | 'Général';
   level: number;
@@ -219,12 +225,22 @@ export interface QCMEvaluationSummary {
 // ==========================================
 export type AttendanceStatus = 'present' | 'absent' | 'late' | 'excused';
 
+export interface AttendanceDisciplineOption {
+  id: string;
+  label: string;
+  score: number; // ex: -1, -3, +1
+  category?: 'negative' | 'positive' | 'neutral';
+}
+
 export interface AttendanceRecord {
   id: string;
   sessionId: string;
   studentId: string;
   status: AttendanceStatus;
   notes?: string;
+  optionsJson?: string;
+  score?: number;
+  options?: AttendanceDisciplineOption[];
   updatedAt: string;
   studentName?: string;
   studentNumber?: string;
@@ -260,5 +276,35 @@ export interface StudentAttendanceSummary {
   lateCount: number;
   excusedCount: number;
   attendanceRate: number;
+  presenceRate?: number;
+  disciplineScore?: number;
+  noNotebookCount?: number;
+  excludedCount?: number;
+}
+
+export interface ClassDisciplineStats {
+  totalSessions: number;
+  totalNoNotebook: number;
+  totalExcluded: number;
+  totalUnprepared: number;
+  totalChatter: number;
+  totalMissingMaterial: number;
+  totalPositive: number;
+  averageScore: number;
+  studentStats: Array<{
+    studentId: string;
+    firstName: string;
+    lastName: string;
+    studentNumber: string;
+    isRepeating: boolean;
+    cumulativeScore: number;
+    noNotebookCount: number;
+    excludedCount: number;
+    unpreparedCount: number;
+    chatterCount: number;
+    missingMaterialCount: number;
+    positiveCount: number;
+    lastObservation?: string;
+  }>;
 }
 

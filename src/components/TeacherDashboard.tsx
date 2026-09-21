@@ -36,7 +36,8 @@ import {
   ArrowDown,
   SlidersHorizontal,
   Filter,
-  X
+  X,
+  Pencil
 } from 'lucide-react';
 import { api } from '../api';
 import { ClassGroup, Student, TeacherUser } from '../types';
@@ -115,6 +116,18 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
   // Manual password edit modal
   const [editingStudentPassword, setEditingStudentPassword] = useState<{ id: string; name: string } | null>(null);
   const [customPasswordInput, setCustomPasswordInput] = useState('');
+
+  // Full student editing modal
+  const [editingStudent, setEditingStudent] = useState<Student | null>(null);
+  const [editFirstName, setEditFirstName] = useState('');
+  const [editLastName, setEditLastName] = useState('');
+  const [editBirthDate, setEditBirthDate] = useState('');
+  const [editStudentNumber, setEditStudentNumber] = useState('');
+  const [editEmail, setEditEmail] = useState('');
+  const [editPassword, setEditPassword] = useState('');
+  const [editIsRepeating, setEditIsRepeating] = useState(false);
+  const [editNotes, setEditNotes] = useState('');
+  const [isSavingStudent, setIsSavingStudent] = useState(false);
 
   // Delete entire class confirmation modal state
   const [classToDelete, setClassToDelete] = useState<{ id: string; name: string; studentCount: number } | null>(null);
@@ -422,6 +435,46 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
       setCustomPasswordInput('');
     } catch (err: any) {
       setActionError(err.message || 'Erreur modification mot de passe');
+    }
+  };
+
+  // Open Full Student Edit Modal
+  const handleOpenEditStudent = (student: Student) => {
+    setEditingStudent(student);
+    setEditFirstName(student.firstName || '');
+    setEditLastName(student.lastName || '');
+    setEditBirthDate(student.birthDate || '');
+    setEditStudentNumber(student.studentNumber || '');
+    setEditEmail(student.email || '');
+    setEditPassword(student.password || '');
+    setEditIsRepeating(Boolean(student.isRepeating));
+    setEditNotes(student.notes || '');
+  };
+
+  // Save Full Student Details
+  const handleSaveStudentDetails = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!session || !editingStudent) return;
+    setIsSavingStudent(true);
+    try {
+      const updated = await api.teacherUpdateStudent(session.token, editingStudent.id, {
+        firstName: editFirstName.trim(),
+        lastName: editLastName.trim(),
+        birthDate: editBirthDate.trim() || undefined,
+        studentNumber: editStudentNumber.trim() || undefined,
+        email: editEmail.trim() || undefined,
+        password: editPassword.trim() || undefined,
+        isRepeating: editIsRepeating,
+        notes: editNotes.trim() || undefined
+      });
+      setStudents(prev => prev.map(s => s.id === updated.id ? updated : s));
+      setActionSuccess(`Fiche de l'élève ${updated.firstName} ${updated.lastName} mise à jour avec succès.`);
+      setTimeout(() => setActionSuccess(''), 4000);
+      setEditingStudent(null);
+    } catch (err: any) {
+      setActionError(err.message || 'Erreur lors de la mise à jour des données de l’élève');
+    } finally {
+      setIsSavingStudent(false);
     }
   };
 
@@ -1203,6 +1256,16 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
                         <div className="inline-flex items-center gap-1">
                           <button
                             type="button"
+                            onClick={() => handleOpenEditStudent(student)}
+                            title="Modifier toutes les informations de l'élève"
+                            className="px-2 py-1 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 rounded-lg text-[11px] font-medium inline-flex items-center gap-1 transition-colors cursor-pointer"
+                          >
+                            <Pencil className="w-3 h-3 text-indigo-600" />
+                            <span className="hidden sm:inline">Modifier</span>
+                          </button>
+
+                          <button
+                            type="button"
                             onClick={() => handleRegeneratePassword(student.id, `${student.firstName} ${student.lastName}`)}
                             title="Générer un nouveau mot de passe simple automatique"
                             className="px-2 py-1 bg-white hover:bg-slate-100 text-slate-700 border border-slate-200 rounded-lg text-[11px] font-medium inline-flex items-center gap-1 transition-colors cursor-pointer"
@@ -1221,7 +1284,7 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
                             className="px-2 py-1 bg-white hover:bg-slate-100 text-slate-700 border border-slate-200 rounded-lg text-[11px] font-medium inline-flex items-center gap-1 transition-colors cursor-pointer"
                           >
                             <Key className="w-3 h-3 text-sky-600" />
-                            <span className="hidden sm:inline">Éditer</span>
+                            <span className="hidden sm:inline">MDP</span>
                           </button>
 
                           <button
@@ -1248,7 +1311,7 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
           {/* Rubrique 2: Courses */}
           {selectedRubrique === 'courses' && (
             <div className="p-6">
-              <CoursesSection classId={selectedClass.id} token={session!.token} isTeacher={true} />
+              <CoursesSection classId={selectedClass.id} token={session!.token} isTeacher={true} classes={classes} />
             </div>
           )}
 
@@ -1259,6 +1322,7 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
                 classId={selectedClass.id}
                 className={selectedClass.name}
                 token={session!.token}
+                classes={classes}
               />
             </div>
           )}
@@ -1587,6 +1651,136 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
                   className="px-4 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold rounded-xl"
                 >
                   Enregistrer
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL: MODIFIER TOUTES LES INFORMATIONS DE L'ÉLÈVE */}
+      {editingStudent && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4 overflow-y-auto">
+          <div className="bg-white rounded-3xl shadow-2xl max-w-lg w-full border border-slate-200 overflow-hidden my-6">
+            <div className="p-5 bg-slate-900 text-white flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Pencil className="w-5 h-5 text-indigo-400" />
+                <h3 className="font-bold text-base">Modifier l'élève : {editingStudent.firstName} {editingStudent.lastName}</h3>
+              </div>
+              <button onClick={() => setEditingStudent(null)} className="text-slate-400 hover:text-white cursor-pointer">✕</button>
+            </div>
+
+            <form onSubmit={handleSaveStudentDetails} className="p-6 space-y-4 text-xs">
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block font-semibold text-slate-700 mb-1">Prénom *</label>
+                  <input
+                    type="text"
+                    required
+                    value={editFirstName}
+                    onChange={e => setEditFirstName(e.target.value)}
+                    className="w-full h-10 px-3 bg-slate-50 border border-slate-300 rounded-xl text-sm focus:ring-2 focus:ring-indigo-500"
+                  />
+                </div>
+                <div>
+                  <label className="block font-semibold text-slate-700 mb-1">Nom *</label>
+                  <input
+                    type="text"
+                    required
+                    value={editLastName}
+                    onChange={e => setEditLastName(e.target.value)}
+                    className="w-full h-10 px-3 bg-slate-50 border border-slate-300 rounded-xl text-sm focus:ring-2 focus:ring-indigo-500"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block font-semibold text-slate-700 mb-1">Identifiant / N° Élève *</label>
+                  <input
+                    type="text"
+                    required
+                    value={editStudentNumber}
+                    onChange={e => setEditStudentNumber(e.target.value)}
+                    className="w-full h-10 px-3 bg-slate-50 border border-slate-300 rounded-xl text-sm font-mono focus:ring-2 focus:ring-indigo-500"
+                  />
+                </div>
+                <div>
+                  <label className="block font-semibold text-slate-700 mb-1">Date de naissance</label>
+                  <input
+                    type="date"
+                    value={editBirthDate}
+                    onChange={e => setEditBirthDate(e.target.value)}
+                    className="w-full h-10 px-3 bg-slate-50 border border-slate-300 rounded-xl text-sm focus:ring-2 focus:ring-indigo-500"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block font-semibold text-slate-700 mb-1">Email (optionnel)</label>
+                  <input
+                    type="email"
+                    value={editEmail}
+                    onChange={e => setEditEmail(e.target.value)}
+                    placeholder="eleve@etablissement.fr"
+                    className="w-full h-10 px-3 bg-slate-50 border border-slate-300 rounded-xl text-sm focus:ring-2 focus:ring-indigo-500"
+                  />
+                </div>
+                <div>
+                  <label className="block font-semibold text-slate-700 mb-1">Mot de passe de connexion</label>
+                  <input
+                    type="text"
+                    value={editPassword}
+                    onChange={e => setEditPassword(e.target.value)}
+                    placeholder="Mot de passe"
+                    className="w-full h-10 px-3 bg-slate-50 border border-slate-300 rounded-xl text-sm font-mono focus:ring-2 focus:ring-indigo-500"
+                  />
+                </div>
+              </div>
+
+              <div className="p-3.5 bg-slate-50 border border-slate-200 rounded-xl">
+                <label className="inline-flex items-center gap-2 cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={editIsRepeating}
+                    onChange={e => setEditIsRepeating(e.target.checked)}
+                    className="w-4 h-4 rounded text-amber-600 focus:ring-amber-500 cursor-pointer"
+                  />
+                  <span className="font-semibold text-slate-800">
+                    Profil de scolarité : {editIsRepeating ? 'Redoublant' : 'Nouveau (non redoublant)'}
+                  </span>
+                </label>
+                <p className="text-[11px] text-slate-500 mt-1">
+                  Ce statut permet de suivre les statistiques et adapter les évaluations individualisées.
+                </p>
+              </div>
+
+              <div>
+                <label className="block font-semibold text-slate-700 mb-1">Observations / Remarques pédagogiques</label>
+                <textarea
+                  rows={3}
+                  value={editNotes}
+                  onChange={e => setEditNotes(e.target.value)}
+                  placeholder="Notes personnelles du professeur sur l'élève..."
+                  className="w-full p-3 bg-slate-50 border border-slate-300 rounded-xl text-sm focus:ring-2 focus:ring-indigo-500 focus:bg-white"
+                />
+              </div>
+
+              <div className="flex justify-end gap-2 pt-3 border-t border-slate-200">
+                <button
+                  type="button"
+                  onClick={() => setEditingStudent(null)}
+                  className="px-4 py-2 text-slate-600 hover:text-slate-800 font-medium cursor-pointer"
+                >
+                  Annuler
+                </button>
+                <button
+                  type="submit"
+                  disabled={isSavingStudent}
+                  className="px-5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold rounded-xl shadow-md cursor-pointer disabled:opacity-50"
+                >
+                  {isSavingStudent ? 'Enregistrement...' : 'Enregistrer les modifications'}
                 </button>
               </div>
             </form>

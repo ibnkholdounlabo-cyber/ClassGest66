@@ -18,7 +18,8 @@ import {
   AttendanceStatus,
   AttendanceRecord,
   AttendanceSession,
-  StudentAttendanceSummary
+  StudentAttendanceSummary,
+  ClassDisciplineStats
 } from '../src/types.js';
 import { generateSimplePassword } from './password.js';
 import { parseQcmImportText } from '../src/utils/qcmParser.js';
@@ -368,6 +369,22 @@ class SQLiteStorage {
         FOREIGN KEY (classId) REFERENCES classes(id) ON DELETE CASCADE
       );
 
+      CREATE TABLE IF NOT EXISTS course_classes (
+        courseId TEXT NOT NULL,
+        classId TEXT NOT NULL,
+        PRIMARY KEY (courseId, classId),
+        FOREIGN KEY (courseId) REFERENCES courses(id) ON DELETE CASCADE,
+        FOREIGN KEY (classId) REFERENCES classes(id) ON DELETE CASCADE
+      );
+
+      CREATE TABLE IF NOT EXISTS test_classes (
+        testId TEXT NOT NULL,
+        classId TEXT NOT NULL,
+        PRIMARY KEY (testId, classId),
+        FOREIGN KEY (testId) REFERENCES tests(id) ON DELETE CASCADE,
+        FOREIGN KEY (classId) REFERENCES classes(id) ON DELETE CASCADE
+      );
+
       CREATE TABLE IF NOT EXISTS attendance_sessions (
         id TEXT PRIMARY KEY,
         classId TEXT NOT NULL,
@@ -386,6 +403,8 @@ class SQLiteStorage {
         studentId TEXT NOT NULL,
         status TEXT NOT NULL DEFAULT 'present',
         notes TEXT DEFAULT '',
+        optionsJson TEXT DEFAULT '[]',
+        score INTEGER DEFAULT 0,
         updatedAt TEXT NOT NULL,
         FOREIGN KEY (sessionId) REFERENCES attendance_sessions(id) ON DELETE CASCADE,
         FOREIGN KEY (studentId) REFERENCES students(id) ON DELETE CASCADE,
@@ -403,6 +422,10 @@ class SQLiteStorage {
       CREATE INDEX IF NOT EXISTS idx_qcm_subs_studentId ON qcm_submissions(studentId);
       CREATE INDEX IF NOT EXISTS idx_qcm_classes_qcmId ON qcm_classes(qcmId);
       CREATE INDEX IF NOT EXISTS idx_qcm_classes_classId ON qcm_classes(classId);
+      CREATE INDEX IF NOT EXISTS idx_course_classes_courseId ON course_classes(courseId);
+      CREATE INDEX IF NOT EXISTS idx_course_classes_classId ON course_classes(classId);
+      CREATE INDEX IF NOT EXISTS idx_test_classes_testId ON test_classes(testId);
+      CREATE INDEX IF NOT EXISTS idx_test_classes_classId ON test_classes(classId);
       CREATE INDEX IF NOT EXISTS idx_att_sess_classId ON attendance_sessions(classId);
       CREATE INDEX IF NOT EXISTS idx_att_rec_sessionId ON attendance_records(sessionId);
       CREATE INDEX IF NOT EXISTS idx_att_rec_studentId ON attendance_records(studentId);
@@ -416,10 +439,40 @@ class SQLiteStorage {
     }
 
     try {
-      this.db.exec('ALTER TABLE students ADD COLUMN isRepeating INTEGER NOT NULL DEFAULT 0;');
-    } catch {
-      // Column already exists
+      this.db.exec(`INSERT OR IGNORE INTO course_classes (courseId, classId) SELECT id, classId FROM courses WHERE classId IS NOT NULL;`);
+    } catch (migErr) {
+      console.warn('Migration course_classes:', migErr);
     }
+
+    try {
+      this.db.exec(`INSERT OR IGNORE INTO test_classes (testId, classId) SELECT id, classId FROM tests WHERE classId IS NOT NULL;`);
+    } catch (migErr) {
+      console.warn('Migration test_classes:', migErr);
+    }
+
+    try {
+      this.db.exec('ALTER TABLE students ADD COLUMN isRepeating INTEGER NOT NULL DEFAULT 0;');
+    } catch {}
+
+    try {
+      this.db.exec("ALTER TABLE courses ADD COLUMN fileUrl TEXT DEFAULT '';");
+    } catch {}
+    try {
+      this.db.exec("ALTER TABLE courses ADD COLUMN fileName TEXT DEFAULT '';");
+    } catch {}
+    try {
+      this.db.exec("ALTER TABLE courses ADD COLUMN fileType TEXT DEFAULT '';");
+    } catch {}
+    try {
+      this.db.exec("ALTER TABLE courses ADD COLUMN fileSize INTEGER DEFAULT 0;");
+    } catch {}
+
+    try {
+      this.db.exec("ALTER TABLE attendance_records ADD COLUMN optionsJson TEXT DEFAULT '[]';");
+    } catch {}
+    try {
+      this.db.exec("ALTER TABLE attendance_records ADD COLUMN score INTEGER DEFAULT 0;");
+    } catch {}
 
     // Vérification : uniquement si la base de données est complètement vierge (0 classe)
     // Cela garantit qu'un redémarrage ou un nouveau déploiement Git ne modifie JAMAIS vos données existantes !
@@ -1079,7 +1132,7 @@ for m in matieres:
     return true;
   }
 
-  public updateStudent(studentId: string, data: Partial<Student>): Student {
+  public updateStudent(studentId: string, data: Partial<Student> & { password?: string }): Student {
     const existing = this.getStudentById(studentId);
     if (!existing) throw new Error('Élève introuvable');
 
@@ -1098,6 +1151,13 @@ for m in matieres:
       WHERE id = ?
     `).run(firstName, lastName, studentNumber || '', birthDate || '', email || '', notes || '', classId, isRepeating, studentId);
 
+    if (data.password && data.password.trim()) {
+      this.db.prepare('UPDATE students SET password = ?, hasChangedPassword = 0 WHERE id = ?').run(
+        data.password.trim(),
+        studentId
+      );
+    }
+
     return this.getStudentById(studentId)!;
   }
 
@@ -1109,23 +1169,64 @@ for m in matieres:
   // ==========================================
   // COURSES
   // ==========================================
+  private getCourseClasses(courseId: string): string[] {
+    try {
+      const rows = this.db.prepare('SELECT classId FROM course_classes WHERE courseId = ?').all(courseId) as any[];
+      return rows.map(r => String(r.classId));
+    } catch {
+      return [];
+    }
+  }
+
   public getCoursesByClass(classId: string): Course[] {
     const rows = this.db.prepare(`
-      SELECT * FROM courses
-      WHERE classId = ?
-      ORDER BY createdAt DESC
-    `).all(classId) as any[];
+      SELECT DISTINCT c.* FROM courses c
+      LEFT JOIN course_classes cc ON cc.courseId = c.id
+      WHERE c.classId = ? OR cc.classId = ?
+      ORDER BY c.createdAt DESC
+    `).all(classId, classId) as any[];
 
-    return rows.map((r) => ({
+    return rows.map((r) => {
+      const linkedClasses = this.getCourseClasses(String(r.id));
+      const classIds = linkedClasses.length > 0 ? linkedClasses : [String(r.classId)];
+      return {
+        id: String(r.id),
+        classId: String(r.classId),
+        classIds,
+        title: String(r.title),
+        category: r.category as any,
+        description: r.description ? String(r.description) : '',
+        content: String(r.content),
+        resourceLink: r.resourceLink ? String(r.resourceLink) : '',
+        fileUrl: r.fileUrl ? String(r.fileUrl) : undefined,
+        fileName: r.fileName ? String(r.fileName) : undefined,
+        fileType: r.fileType ? String(r.fileType) : undefined,
+        fileSize: r.fileSize ? Number(r.fileSize) : undefined,
+        createdAt: String(r.createdAt)
+      };
+    });
+  }
+
+  public getCourseById(courseId: string): Course | undefined {
+    const r = this.db.prepare('SELECT * FROM courses WHERE id = ?').get(courseId) as any;
+    if (!r) return undefined;
+    const linkedClasses = this.getCourseClasses(String(r.id));
+    const classIds = linkedClasses.length > 0 ? linkedClasses : [String(r.classId)];
+    return {
       id: String(r.id),
       classId: String(r.classId),
+      classIds,
       title: String(r.title),
       category: r.category as any,
       description: r.description ? String(r.description) : '',
       content: String(r.content),
       resourceLink: r.resourceLink ? String(r.resourceLink) : '',
+      fileUrl: r.fileUrl ? String(r.fileUrl) : undefined,
+      fileName: r.fileName ? String(r.fileName) : undefined,
+      fileType: r.fileType ? String(r.fileType) : undefined,
+      fileSize: r.fileSize ? Number(r.fileSize) : undefined,
       createdAt: String(r.createdAt)
-    }));
+    };
   }
 
   public createCourse(classId: string, data: {
@@ -1134,37 +1235,115 @@ for m in matieres:
     description?: string;
     content: string;
     resourceLink?: string;
+    fileUrl?: string;
+    fileName?: string;
+    fileType?: string;
+    fileSize?: number;
+    classIds?: string[];
   }): Course {
     const id = 'crs-' + Date.now().toString(36) + Math.random().toString(36).substring(2, 5);
     const createdAt = new Date().toISOString();
 
+    const targetClasses = (Array.isArray(data.classIds) && data.classIds.length > 0)
+      ? Array.from(new Set(data.classIds))
+      : [classId];
+
+    const primaryClassId = targetClasses[0] || classId;
+
     this.db.prepare(`
-      INSERT INTO courses (id, classId, title, category, description, content, resourceLink, createdAt)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO courses (
+        id, classId, title, category, description, content, resourceLink,
+        fileUrl, fileName, fileType, fileSize, createdAt
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       id,
-      classId,
+      primaryClassId,
       data.title.trim(),
       data.category,
       data.description?.trim() || '',
       data.content.trim(),
       data.resourceLink?.trim() || '',
+      data.fileUrl || '',
+      data.fileName || '',
+      data.fileType || '',
+      data.fileSize || 0,
       createdAt
     );
 
+    const insertClassStmt = this.db.prepare('INSERT OR IGNORE INTO course_classes (courseId, classId) VALUES (?, ?)');
+    for (const cid of targetClasses) {
+      insertClassStmt.run(id, cid);
+    }
+
     return {
       id,
-      classId,
+      classId: primaryClassId,
+      classIds: targetClasses,
       title: data.title.trim(),
       category: data.category,
       description: data.description?.trim() || '',
       content: data.content.trim(),
       resourceLink: data.resourceLink?.trim() || '',
+      fileUrl: data.fileUrl,
+      fileName: data.fileName,
+      fileType: data.fileType,
+      fileSize: data.fileSize,
       createdAt
     };
   }
 
+  public updateCourse(courseId: string, data: Partial<Course> & { classIds?: string[] }): Course {
+    const existing = this.getCourseById(courseId);
+    if (!existing) throw new Error('Cours introuvable');
+
+    const title = data.title !== undefined ? data.title.trim() : existing.title;
+    const category = data.category || existing.category;
+    const description = data.description !== undefined ? data.description.trim() : existing.description;
+    const content = data.content !== undefined ? data.content.trim() : existing.content;
+    const resourceLink = data.resourceLink !== undefined ? data.resourceLink.trim() : existing.resourceLink;
+    const fileUrl = data.fileUrl !== undefined ? data.fileUrl : (existing.fileUrl || '');
+    const fileName = data.fileName !== undefined ? data.fileName : (existing.fileName || '');
+    const fileType = data.fileType !== undefined ? data.fileType : (existing.fileType || '');
+    const fileSize = data.fileSize !== undefined ? Number(data.fileSize) : (existing.fileSize || 0);
+
+    let targetClasses = existing.classIds || [existing.classId];
+    if (Array.isArray(data.classIds) && data.classIds.length > 0) {
+      targetClasses = Array.from(new Set(data.classIds));
+    }
+    const primaryClassId = targetClasses[0] || existing.classId;
+
+    this.db.prepare(`
+      UPDATE courses
+      SET title = ?, category = ?, description = ?, content = ?, resourceLink = ?,
+          fileUrl = ?, fileName = ?, fileType = ?, fileSize = ?, classId = ?
+      WHERE id = ?
+    `).run(
+      title,
+      category,
+      description || '',
+      content,
+      resourceLink || '',
+      fileUrl,
+      fileName,
+      fileType,
+      fileSize,
+      primaryClassId,
+      courseId
+    );
+
+    if (Array.isArray(data.classIds)) {
+      this.db.prepare('DELETE FROM course_classes WHERE courseId = ?').run(courseId);
+      const insertClassStmt = this.db.prepare('INSERT OR IGNORE INTO course_classes (courseId, classId) VALUES (?, ?)');
+      for (const cid of targetClasses) {
+        insertClassStmt.run(courseId, cid);
+      }
+    }
+
+    return this.getCourseById(courseId)!;
+  }
+
   public deleteCourse(courseId: string): boolean {
+    this.db.prepare('DELETE FROM course_classes WHERE courseId = ?').run(courseId);
     const result = this.db.prepare('DELETE FROM courses WHERE id = ?').run(courseId);
     return Number(result.changes) > 0;
   }
@@ -1172,34 +1351,52 @@ for m in matieres:
   // ==========================================
   // TESTS
   // ==========================================
+  private getTestClasses(testId: string): string[] {
+    try {
+      const rows = this.db.prepare('SELECT classId FROM test_classes WHERE testId = ?').all(testId) as any[];
+      return rows.map(r => String(r.classId));
+    } catch {
+      return [];
+    }
+  }
+
   public getTestsByClass(classId: string): TypingTest[] {
     const rows = this.db.prepare(`
-      SELECT * FROM tests
-      WHERE classId = ?
-      ORDER BY theme ASC, level ASC
-    `).all(classId) as any[];
+      SELECT DISTINCT t.* FROM tests t
+      LEFT JOIN test_classes tc ON tc.testId = t.id
+      WHERE t.classId = ? OR tc.classId = ?
+      ORDER BY t.theme ASC, t.level ASC
+    `).all(classId, classId) as any[];
 
-    return rows.map((r) => ({
-      id: String(r.id),
-      classId: String(r.classId),
-      title: String(r.title),
-      theme: r.theme as any,
-      level: Number(r.level),
-      timeLimitSeconds: Number(r.timeLimitSeconds),
-      targetText: String(r.targetText),
-      minAccuracyPercent: Number(r.minAccuracyPercent),
-      minWpm: Number(r.minWpm),
-      description: r.description ? String(r.description) : '',
-      createdAt: String(r.createdAt)
-    }));
+    return rows.map((r) => {
+      const linkedClasses = this.getTestClasses(String(r.id));
+      const classIds = linkedClasses.length > 0 ? linkedClasses : [String(r.classId)];
+      return {
+        id: String(r.id),
+        classId: String(r.classId),
+        classIds,
+        title: String(r.title),
+        theme: r.theme as any,
+        level: Number(r.level),
+        timeLimitSeconds: Number(r.timeLimitSeconds),
+        targetText: String(r.targetText),
+        minAccuracyPercent: Number(r.minAccuracyPercent),
+        minWpm: Number(r.minWpm),
+        description: r.description ? String(r.description) : '',
+        createdAt: String(r.createdAt)
+      };
+    });
   }
 
   public getTestById(testId: string): TypingTest | undefined {
     const r = this.db.prepare('SELECT * FROM tests WHERE id = ?').get(testId) as any;
     if (!r) return undefined;
+    const linkedClasses = this.getTestClasses(String(r.id));
+    const classIds = linkedClasses.length > 0 ? linkedClasses : [String(r.classId)];
     return {
       id: String(r.id),
       classId: String(r.classId),
+      classIds,
       title: String(r.title),
       theme: r.theme as any,
       level: Number(r.level),
@@ -1221,11 +1418,17 @@ for m in matieres:
     minAccuracyPercent?: number;
     minWpm?: number;
     description?: string;
+    classIds?: string[];
   }): TypingTest {
     const id = 'tst-' + Date.now().toString(36) + Math.random().toString(36).substring(2, 5);
     const createdAt = new Date().toISOString();
     const minAccuracyPercent = data.minAccuracyPercent ? Number(data.minAccuracyPercent) : 80;
     const minWpm = data.minWpm ? Number(data.minWpm) : 15;
+
+    const targetClasses = (Array.isArray(data.classIds) && data.classIds.length > 0)
+      ? Array.from(new Set(data.classIds))
+      : [classId];
+    const primaryClassId = targetClasses[0] || classId;
 
     this.db.prepare(`
       INSERT INTO tests (
@@ -1234,7 +1437,7 @@ for m in matieres:
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       id,
-      classId,
+      primaryClassId,
       data.title.trim(),
       data.theme,
       Number(data.level),
@@ -1246,9 +1449,15 @@ for m in matieres:
       createdAt
     );
 
+    const insertClassStmt = this.db.prepare('INSERT OR IGNORE INTO test_classes (testId, classId) VALUES (?, ?)');
+    for (const cid of targetClasses) {
+      insertClassStmt.run(id, cid);
+    }
+
     return {
       id,
-      classId,
+      classId: primaryClassId,
+      classIds: targetClasses,
       title: data.title.trim(),
       theme: data.theme,
       level: Number(data.level),
@@ -1261,7 +1470,56 @@ for m in matieres:
     };
   }
 
+  public updateTest(testId: string, data: Partial<TypingTest> & { classIds?: string[] }): TypingTest {
+    const existing = this.getTestById(testId);
+    if (!existing) throw new Error('Test introuvable');
+
+    const title = data.title !== undefined ? data.title.trim() : existing.title;
+    const theme = data.theme || existing.theme;
+    const level = data.level !== undefined ? Number(data.level) : existing.level;
+    const timeLimitSeconds = data.timeLimitSeconds !== undefined ? Number(data.timeLimitSeconds) : existing.timeLimitSeconds;
+    const targetText = data.targetText !== undefined ? data.targetText.trim() : existing.targetText;
+    const minAccuracyPercent = data.minAccuracyPercent !== undefined ? Number(data.minAccuracyPercent) : existing.minAccuracyPercent;
+    const minWpm = data.minWpm !== undefined ? Number(data.minWpm) : existing.minWpm;
+    const description = data.description !== undefined ? data.description.trim() : existing.description;
+
+    let targetClasses = existing.classIds || [existing.classId];
+    if (Array.isArray(data.classIds) && data.classIds.length > 0) {
+      targetClasses = Array.from(new Set(data.classIds));
+    }
+    const primaryClassId = targetClasses[0] || existing.classId;
+
+    this.db.prepare(`
+      UPDATE tests
+      SET title = ?, theme = ?, level = ?, timeLimitSeconds = ?, targetText = ?,
+          minAccuracyPercent = ?, minWpm = ?, description = ?, classId = ?
+      WHERE id = ?
+    `).run(
+      title,
+      theme,
+      level,
+      timeLimitSeconds,
+      targetText,
+      minAccuracyPercent,
+      minWpm,
+      description || '',
+      primaryClassId,
+      testId
+    );
+
+    if (Array.isArray(data.classIds)) {
+      this.db.prepare('DELETE FROM test_classes WHERE testId = ?').run(testId);
+      const insertClassStmt = this.db.prepare('INSERT OR IGNORE INTO test_classes (testId, classId) VALUES (?, ?)');
+      for (const cid of targetClasses) {
+        insertClassStmt.run(testId, cid);
+      }
+    }
+
+    return this.getTestById(testId)!;
+  }
+
   public deleteTest(testId: string): boolean {
+    this.db.prepare('DELETE FROM test_classes WHERE testId = ?').run(testId);
     this.db.prepare('DELETE FROM test_evaluations WHERE testId = ?').run(testId);
     const result = this.db.prepare('DELETE FROM tests WHERE id = ?').run(testId);
     return Number(result.changes) > 0;
@@ -2153,6 +2411,8 @@ for m in matieres:
         COALESCE(r.id, '') as recordId,
         COALESCE(r.status, 'present') as status,
         COALESCE(r.notes, '') as recordNotes,
+        COALESCE(r.optionsJson, '[]') as optionsJson,
+        COALESCE(r.score, 0) as score,
         COALESCE(r.updatedAt, '') as updatedAt
       FROM students s
       LEFT JOIN attendance_records r ON r.studentId = s.id AND r.sessionId = ?
@@ -2160,17 +2420,28 @@ for m in matieres:
       ORDER BY s.lastName COLLATE NOCASE ASC, s.firstName COLLATE NOCASE ASC
     `).all(sessionId, session.classId) as any[];
 
-    const formattedRecords: AttendanceRecord[] = records.map((r) => ({
-      id: r.recordId || `att-${session.id}-${r.studentId}`,
-      sessionId: String(session.id),
-      studentId: String(r.studentId),
-      status: (r.status || 'present') as AttendanceStatus,
-      notes: String(r.recordNotes || ''),
-      updatedAt: r.updatedAt ? String(r.updatedAt) : new Date().toISOString(),
-      studentName: `${r.firstName} ${r.lastName}`,
-      studentNumber: String(r.studentNumber || ''),
-      isRepeating: Boolean(r.isRepeating)
-    }));
+    const formattedRecords: AttendanceRecord[] = records.map((r) => {
+      let parsedOptions: any[] = [];
+      try {
+        parsedOptions = JSON.parse(r.optionsJson || '[]');
+      } catch {
+        parsedOptions = [];
+      }
+      return {
+        id: r.recordId || `att-${session.id}-${r.studentId}`,
+        sessionId: String(session.id),
+        studentId: String(r.studentId),
+        status: (r.status || 'present') as AttendanceStatus,
+        notes: String(r.recordNotes || ''),
+        optionsJson: String(r.optionsJson || '[]'),
+        score: Number(r.score || 0),
+        options: parsedOptions,
+        updatedAt: r.updatedAt ? String(r.updatedAt) : new Date().toISOString(),
+        studentName: `${r.firstName} ${r.lastName}`,
+        studentNumber: String(r.studentNumber || ''),
+        isRepeating: Boolean(r.isRepeating)
+      };
+    });
 
     const presentCount = formattedRecords.filter(r => r.status === 'present').length;
     const absentCount = formattedRecords.filter(r => r.status === 'absent').length;
@@ -2276,17 +2547,25 @@ for m in matieres:
     return this.getAttendanceSessionDetails(sessionId)!;
   }
 
-  public saveAttendanceRecords(sessionId: string, records: Array<{ studentId: string; status: AttendanceStatus; notes?: string }>): boolean {
+  public saveAttendanceRecords(sessionId: string, records: Array<{
+    studentId: string;
+    status: AttendanceStatus;
+    notes?: string;
+    optionsJson?: string;
+    score?: number;
+  }>): boolean {
     const session = this.db.prepare('SELECT * FROM attendance_sessions WHERE id = ?').get(sessionId) as any;
     if (!session) throw new Error('Séance introuvable');
 
     const now = new Date().toISOString();
     const upsertStmt = this.db.prepare(`
-      INSERT INTO attendance_records (id, sessionId, studentId, status, notes, updatedAt)
-      VALUES (?, ?, ?, ?, ?, ?)
+      INSERT INTO attendance_records (id, sessionId, studentId, status, notes, optionsJson, score, updatedAt)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(sessionId, studentId) DO UPDATE SET
         status = excluded.status,
         notes = excluded.notes,
+        optionsJson = excluded.optionsJson,
+        score = excluded.score,
         updatedAt = excluded.updatedAt
     `);
 
@@ -2299,6 +2578,8 @@ for m in matieres:
           rec.studentId,
           rec.status,
           rec.notes || '',
+          rec.optionsJson || '[]',
+          rec.score !== undefined ? Number(rec.score) : 0,
           now
         );
       }
@@ -2329,7 +2610,10 @@ for m in matieres:
         SUM(CASE WHEN r.status = 'present' THEN 1 ELSE 0 END) as presentCount,
         SUM(CASE WHEN r.status = 'absent' THEN 1 ELSE 0 END) as absentCount,
         SUM(CASE WHEN r.status = 'late' THEN 1 ELSE 0 END) as lateCount,
-        SUM(CASE WHEN r.status = 'excused' THEN 1 ELSE 0 END) as excusedCount
+        SUM(CASE WHEN r.status = 'excused' THEN 1 ELSE 0 END) as excusedCount,
+        SUM(COALESCE(r.score, 0)) as totalScore,
+        SUM(CASE WHEN r.optionsJson LIKE '%opt-no-notebook%' THEN 1 ELSE 0 END) as noNotebookCount,
+        SUM(CASE WHEN r.optionsJson LIKE '%opt-excluded%' THEN 1 ELSE 0 END) as excludedCount
       FROM attendance_records r
       JOIN attendance_sessions s ON s.id = r.sessionId
       WHERE s.classId = ? AND r.studentId = ?
@@ -2355,11 +2639,120 @@ for m in matieres:
         absentCount,
         lateCount,
         excusedCount,
-        attendanceRate
+        attendanceRate,
+        disciplineScore: Number(row?.totalScore || 0),
+        noNotebookCount: Number(row?.noNotebookCount || 0),
+        excludedCount: Number(row?.excludedCount || 0)
       });
     }
 
     return summaries;
+  }
+
+  public getClassDisciplineSummary(classId: string): ClassDisciplineStats {
+    const students = this.getStudentsByClass(classId);
+    const totalSessionsRow = this.db.prepare('SELECT COUNT(*) as count FROM attendance_sessions WHERE classId = ?').get(classId) as any;
+    const totalSessions = Number(totalSessionsRow?.count || 0);
+
+    let totalNoNotebook = 0;
+    let totalExcluded = 0;
+    let totalUnprepared = 0;
+    let totalChatter = 0;
+    let totalMissingMaterial = 0;
+    let totalPositive = 0;
+    let scoreSum = 0;
+
+    const studentRecordsStmt = this.db.prepare(`
+      SELECT
+        r.optionsJson,
+        r.score,
+        r.notes,
+        s.title as sessionTitle,
+        s.date as sessionDate
+      FROM attendance_records r
+      JOIN attendance_sessions s ON s.id = r.sessionId
+      WHERE s.classId = ? AND r.studentId = ?
+      ORDER BY s.date DESC
+    `);
+
+    const studentStats: ClassDisciplineStats['studentStats'] = [];
+
+    for (const st of students) {
+      const records = studentRecordsStmt.all(classId, st.id) as any[];
+      let cumulativeScore = 0;
+      let noNotebookCount = 0;
+      let excludedCount = 0;
+      let unpreparedCount = 0;
+      let chatterCount = 0;
+      let missingMaterialCount = 0;
+      let positiveCount = 0;
+      let lastObservation: string | undefined = undefined;
+
+      for (const rec of records) {
+        cumulativeScore += Number(rec.score || 0);
+        if (rec.notes && rec.notes.trim() && !lastObservation) {
+          lastObservation = String(rec.notes.trim());
+        }
+
+        const optStr = String(rec.optionsJson || '');
+        if (optStr.includes('opt-no-notebook')) {
+          noNotebookCount++;
+          totalNoNotebook++;
+        }
+        if (optStr.includes('opt-excluded')) {
+          excludedCount++;
+          totalExcluded++;
+        }
+        if (optStr.includes('opt-unprepared')) {
+          unpreparedCount++;
+          totalUnprepared++;
+        }
+        if (optStr.includes('opt-chatter')) {
+          chatterCount++;
+          totalChatter++;
+        }
+        if (optStr.includes('opt-no-material')) {
+          missingMaterialCount++;
+          totalMissingMaterial++;
+        }
+        if (optStr.includes('opt-participated') || optStr.includes('opt-bonus')) {
+          positiveCount++;
+          totalPositive++;
+        }
+      }
+
+      scoreSum += cumulativeScore;
+
+      studentStats.push({
+        studentId: st.id,
+        firstName: st.firstName,
+        lastName: st.lastName,
+        studentNumber: st.studentNumber,
+        isRepeating: Boolean(st.isRepeating),
+        cumulativeScore,
+        noNotebookCount,
+        excludedCount,
+        unpreparedCount,
+        chatterCount,
+        missingMaterialCount,
+        positiveCount,
+        lastObservation
+      });
+    }
+
+    const averageScore = students.length > 0 ? Number((scoreSum / students.length).toFixed(1)) : 0;
+
+    return {
+      totalSessions,
+      totalNoNotebook,
+      totalExcluded,
+      totalUnprepared,
+      totalChatter,
+      totalMissingMaterial,
+      totalPositive,
+      averageScore,
+      studentStats
+    };
   }
 
   public getStudentAttendanceHistory(studentId: string): {

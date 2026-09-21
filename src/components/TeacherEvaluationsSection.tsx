@@ -24,25 +24,33 @@ import {
   ArrowDown,
   SlidersHorizontal,
   Filter,
-  X
+  X,
+  Pencil,
+  Sparkles,
+  School,
+  Layers
 } from 'lucide-react';
 import {
   ClassEvaluationsSummary,
   TypingTest,
-  TestEvaluation
+  TestEvaluation,
+  ClassGroup
 } from '../types';
 import { api } from '../api';
+import { formatPythonCode } from '../utils/pythonFormatter';
 
 interface TeacherEvaluationsSectionProps {
   classId: string;
   className: string;
   token: string;
+  classes?: ClassGroup[];
 }
 
 export const TeacherEvaluationsSection: React.FC<TeacherEvaluationsSectionProps> = ({
   classId,
   className,
-  token
+  token,
+  classes = []
 }) => {
   const [evalSummary, setEvalSummary] = useState<ClassEvaluationsSummary | null>(null);
   const [tests, setTests] = useState<TypingTest[]>([]);
@@ -82,8 +90,23 @@ export const TeacherEvaluationsSection: React.FC<TeacherEvaluationsSectionProps>
   const [newMinWpm, setNewMinWpm] = useState<number>(20);
   const [newTargetText, setNewTargetText] = useState('');
   const [newDescription, setNewDescription] = useState('');
+  const [newClassIds, setNewClassIds] = useState<string[]>([classId]);
   const [isSubmittingTest, setIsSubmittingTest] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
+
+  // Edit Test Modal / Form state
+  const [editingTest, setEditingTest] = useState<TypingTest | null>(null);
+  const [editTitle, setEditTitle] = useState('');
+  const [editTheme, setEditTheme] = useState<'Word' | 'Excel' | 'Python' | 'Général'>('Word');
+  const [editLevel, setEditLevel] = useState<number>(1);
+  const [editTimeLimit, setEditTimeLimit] = useState<number>(60);
+  const [editMinAccuracy, setEditMinAccuracy] = useState<number>(85);
+  const [editMinWpm, setEditMinWpm] = useState<number>(20);
+  const [editTargetText, setEditTargetText] = useState('');
+  const [editDescription, setEditDescription] = useState('');
+  const [editClassIds, setEditClassIds] = useState<string[]>([]);
+  const [isUpdatingTest, setIsUpdatingTest] = useState(false);
+  const [editFormError, setEditFormError] = useState<string | null>(null);
 
   const fetchData = async () => {
     setLoading(true);
@@ -121,26 +144,84 @@ export const TeacherEvaluationsSection: React.FC<TeacherEvaluationsSectionProps>
     setIsSubmittingTest(true);
     setFormError(null);
     try {
+      // Auto-format Python code script to PEP 8 standards
+      let finalText = newTargetText.trim();
+      if (newTheme === 'Python') {
+        finalText = formatPythonCode(finalText);
+      }
+
       await api.teacherCreateTest(token, classId, {
         title: newTitle.trim(),
         theme: newTheme,
         level: Number(newLevel),
         timeLimitSeconds: Number(newTimeLimit),
-        targetText: newTargetText.trim(),
+        targetText: finalText,
         minAccuracyPercent: Number(newMinAccuracy),
         minWpm: Number(newMinWpm),
-        description: newDescription.trim()
+        description: newDescription.trim(),
+        classIds: newClassIds.length > 0 ? newClassIds : [classId]
       });
 
       setShowAddTestModal(false);
       setNewTitle('');
       setNewTargetText('');
       setNewDescription('');
+      setNewClassIds([classId]);
       await fetchData();
     } catch (err: any) {
       setFormError(err.message || 'Erreur lors de la création du test');
     } finally {
       setIsSubmittingTest(false);
+    }
+  };
+
+  const handleOpenEditTest = (test: TypingTest) => {
+    setEditingTest(test);
+    setEditTitle(test.title);
+    setEditTheme(test.theme);
+    setEditLevel(test.level);
+    setEditTimeLimit(test.timeLimitSeconds);
+    setEditMinAccuracy(test.minAccuracyPercent);
+    setEditMinWpm(test.minWpm);
+    setEditTargetText(test.targetText);
+    setEditDescription(test.description || '');
+    setEditClassIds(test.classIds && test.classIds.length > 0 ? test.classIds : [test.classId || classId]);
+    setEditFormError(null);
+  };
+
+  const handleUpdateTest = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingTest || !editTitle.trim() || !editTargetText.trim()) {
+      setEditFormError('Le titre et le texte cible à taper sont obligatoires.');
+      return;
+    }
+
+    setIsUpdatingTest(true);
+    setEditFormError(null);
+    try {
+      let finalText = editTargetText.trim();
+      if (editTheme === 'Python') {
+        finalText = formatPythonCode(finalText);
+      }
+
+      await api.teacherUpdateTest(token, editingTest.id, {
+        title: editTitle.trim(),
+        theme: editTheme,
+        level: Number(editLevel),
+        timeLimitSeconds: Number(editTimeLimit),
+        targetText: finalText,
+        minAccuracyPercent: Number(editMinAccuracy),
+        minWpm: Number(editMinWpm),
+        description: editDescription.trim(),
+        classIds: editClassIds.length > 0 ? editClassIds : [classId]
+      });
+
+      setEditingTest(null);
+      await fetchData();
+    } catch (err: any) {
+      setEditFormError(err.message || 'Erreur lors de la modification du test');
+    } finally {
+      setIsUpdatingTest(false);
     }
   };
 
@@ -1063,13 +1144,22 @@ export const TeacherEvaluationsSection: React.FC<TeacherEvaluationsSectionProps>
                           <span>{t.theme} • Niveau {t.level}</span>
                         </span>
 
-                        <button
-                          onClick={() => handleDeleteTest(t.id)}
-                          className="p-1.5 text-slate-400 hover:text-rose-600 rounded-lg hover:bg-rose-50 transition-colors cursor-pointer"
-                          title="Supprimer ce test"
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </button>
+                        <div className="flex items-center gap-1">
+                          <button
+                            onClick={() => handleOpenEditTest(t)}
+                            className="p-1.5 text-slate-400 hover:text-indigo-600 rounded-lg hover:bg-indigo-50 transition-colors cursor-pointer"
+                            title="Modifier ce test"
+                          >
+                            <Pencil className="w-4 h-4" />
+                          </button>
+                          <button
+                            onClick={() => handleDeleteTest(t.id)}
+                            className="p-1.5 text-slate-400 hover:text-rose-600 rounded-lg hover:bg-rose-50 transition-colors cursor-pointer"
+                            title="Supprimer ce test"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        </div>
                       </div>
 
                       <h4 className="text-sm font-bold text-slate-900 leading-snug">
@@ -1080,6 +1170,14 @@ export const TeacherEvaluationsSection: React.FC<TeacherEvaluationsSectionProps>
                         <p className="text-xs text-slate-500 line-clamp-2">
                           {t.description}
                         </p>
+                      )}
+
+                      {/* Multi-classes indication */}
+                      {t.classIds && t.classIds.length > 1 && (
+                        <div className="flex items-center gap-1 text-[11px] text-indigo-600 font-medium">
+                          <Layers className="w-3 h-3" />
+                          <span>Associé à {t.classIds.length} classes</span>
+                        </div>
                       )}
 
                       {/* Text extract */}
@@ -1228,6 +1326,43 @@ export const TeacherEvaluationsSection: React.FC<TeacherEvaluationsSectionProps>
                 </div>
               </div>
 
+              {/* Multi-class Association */}
+              {classes.length > 0 && (
+                <div className="p-3 bg-indigo-50/60 border border-indigo-100 rounded-xl space-y-2">
+                  <label className="block text-xs font-bold text-indigo-900 uppercase tracking-wider flex items-center gap-1.5">
+                    <School className="w-3.5 h-3.5 text-indigo-600" />
+                    <span>Associer ce test aux classes :</span>
+                  </label>
+                  <div className="flex flex-wrap gap-2">
+                    {classes.map((c) => {
+                      const isSelected = newClassIds.includes(c.id);
+                      return (
+                        <button
+                          key={c.id}
+                          type="button"
+                          onClick={() => {
+                            if (isSelected) {
+                              if (newClassIds.length > 1) {
+                                setNewClassIds(newClassIds.filter((id) => id !== c.id));
+                              }
+                            } else {
+                              setNewClassIds([...newClassIds, c.id]);
+                            }
+                          }}
+                          className={`px-3 py-1 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
+                            isSelected
+                              ? 'bg-indigo-600 text-white shadow-xs'
+                              : 'bg-white text-slate-700 border border-slate-200 hover:bg-slate-50'
+                          }`}
+                        >
+                          {isSelected ? '✓ ' : '+ '} {c.name}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
               <div>
                 <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
                   Description brève / Objectif pédagogique
@@ -1242,9 +1377,25 @@ export const TeacherEvaluationsSection: React.FC<TeacherEvaluationsSectionProps>
               </div>
 
               <div>
-                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
-                  Texte exact à reproduire au clavier *
-                </label>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider">
+                    Texte exact à reproduire au clavier *
+                  </label>
+                  {newTheme === 'Python' && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const formatted = formatPythonCode(newTargetText);
+                        setNewTargetText(formatted);
+                      }}
+                      className="inline-flex items-center gap-1 text-[11px] font-bold text-amber-700 hover:text-amber-900 bg-amber-50 hover:bg-amber-100 px-2 py-0.5 rounded-lg border border-amber-200 transition-colors"
+                      title="Mettre en forme le code Python aux normes PEP 8"
+                    >
+                      <Sparkles className="w-3 h-3 text-amber-600" />
+                      <span>Formater script Python (PEP 8)</span>
+                    </button>
+                  )}
+                </div>
                 <textarea
                   required
                   rows={4}
@@ -1253,6 +1404,11 @@ export const TeacherEvaluationsSection: React.FC<TeacherEvaluationsSectionProps>
                   placeholder="Tapez le texte ou le script python ou la formule excel que l'élève devra saisir au clavier..."
                   className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 text-xs font-mono text-slate-900 focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none resize-y"
                 />
+                {newTheme === 'Python' && (
+                  <p className="text-[11px] text-amber-700 mt-1">
+                    ✓ Le script sera automatiquement mis en forme aux normes PEP 8 lors de l'enregistrement.
+                  </p>
+                )}
               </div>
 
               <div className="flex items-center justify-end gap-3 pt-3 border-t border-slate-200">
@@ -1269,6 +1425,226 @@ export const TeacherEvaluationsSection: React.FC<TeacherEvaluationsSectionProps>
                   className="px-5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold shadow-md shadow-emerald-600/20 cursor-pointer disabled:opacity-50"
                 >
                   {isSubmittingTest ? 'Création en cours...' : 'Créer et Enregistrer le test'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* EDIT TEST MODAL */}
+      {editingTest && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/70 backdrop-blur-sm p-4 overflow-y-auto">
+          <div className="bg-white rounded-3xl border border-slate-200 w-full max-w-2xl shadow-2xl overflow-hidden my-6">
+            <div className="px-6 py-4 border-b border-slate-200 flex items-center justify-between bg-slate-50">
+              <h3 className="text-base font-bold text-slate-900 flex items-center gap-2">
+                <Pencil className="w-5 h-5 text-indigo-600" />
+                <span>Modifier le Test de Frappe</span>
+              </h3>
+              <button
+                onClick={() => setEditingTest(null)}
+                className="p-1.5 rounded-xl text-slate-400 hover:text-slate-700 hover:bg-slate-200 transition-colors cursor-pointer"
+              >
+                ✕
+              </button>
+            </div>
+
+            <form onSubmit={handleUpdateTest} className="p-6 space-y-4">
+              {editFormError && (
+                <div className="p-3 rounded-xl bg-rose-50 border border-rose-200 text-rose-700 text-xs">
+                  {editFormError}
+                </div>
+              )}
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
+                  Titre du test *
+                </label>
+                <input
+                  type="text"
+                  required
+                  value={editTitle}
+                  onChange={(e) => setEditTitle(e.target.value)}
+                  className="w-full px-3.5 py-2 rounded-xl border border-slate-300 text-xs text-slate-900 focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none"
+                />
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
+                    Thème / Support *
+                  </label>
+                  <select
+                    value={editTheme}
+                    onChange={(e) => setEditTheme(e.target.value as any)}
+                    className="w-full px-3.5 py-2 rounded-xl border border-slate-300 text-xs text-slate-900 focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none bg-white"
+                  >
+                    <option value="Word">Word (Traitement de texte)</option>
+                    <option value="Excel">Excel (Formules & Tableaux)</option>
+                    <option value="Python">Python (Scripts & Code)</option>
+                    <option value="Général">Général</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
+                    Niveau *
+                  </label>
+                  <input
+                    type="number"
+                    min="1"
+                    max="20"
+                    required
+                    value={editLevel}
+                    onChange={(e) => setEditLevel(Number(e.target.value))}
+                    className="w-full px-3.5 py-2 rounded-xl border border-slate-300 text-xs text-slate-900 focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
+                    Temps imparti (sec) *
+                  </label>
+                  <input
+                    type="number"
+                    min="15"
+                    max="600"
+                    step="5"
+                    required
+                    value={editTimeLimit}
+                    onChange={(e) => setEditTimeLimit(Number(e.target.value))}
+                    className="w-full px-3.5 py-2 rounded-xl border border-slate-300 text-xs text-slate-900 focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
+                    Précision min. requise (%)
+                  </label>
+                  <input
+                    type="number"
+                    min="50"
+                    max="100"
+                    value={editMinAccuracy}
+                    onChange={(e) => setEditMinAccuracy(Number(e.target.value))}
+                    className="w-full px-3.5 py-2 rounded-xl border border-slate-300 text-xs text-slate-900 focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
+                    Vitesse min. requise (WPM)
+                  </label>
+                  <input
+                    type="number"
+                    min="5"
+                    max="120"
+                    value={editMinWpm}
+                    onChange={(e) => setEditMinWpm(Number(e.target.value))}
+                    className="w-full px-3.5 py-2 rounded-xl border border-slate-300 text-xs text-slate-900 focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none"
+                  />
+                </div>
+              </div>
+
+              {/* Multi-class Association */}
+              {classes.length > 0 && (
+                <div className="p-3 bg-indigo-50/60 border border-indigo-100 rounded-xl space-y-2">
+                  <label className="block text-xs font-bold text-indigo-900 uppercase tracking-wider flex items-center gap-1.5">
+                    <School className="w-3.5 h-3.5 text-indigo-600" />
+                    <span>Classes associées à ce test :</span>
+                  </label>
+                  <div className="flex flex-wrap gap-2">
+                    {classes.map((c) => {
+                      const isSelected = editClassIds.includes(c.id);
+                      return (
+                        <button
+                          key={c.id}
+                          type="button"
+                          onClick={() => {
+                            if (isSelected) {
+                              if (editClassIds.length > 1) {
+                                setEditClassIds(editClassIds.filter((id) => id !== c.id));
+                              }
+                            } else {
+                              setEditClassIds([...editClassIds, c.id]);
+                            }
+                          }}
+                          className={`px-3 py-1 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
+                            isSelected
+                              ? 'bg-indigo-600 text-white shadow-xs'
+                              : 'bg-white text-slate-700 border border-slate-200 hover:bg-slate-50'
+                          }`}
+                        >
+                          {isSelected ? '✓ ' : '+ '} {c.name}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
+                  Description brève / Objectif pédagogique
+                </label>
+                <input
+                  type="text"
+                  value={editDescription}
+                  onChange={(e) => setEditDescription(e.target.value)}
+                  className="w-full px-3.5 py-2 rounded-xl border border-slate-300 text-xs text-slate-900 focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none"
+                />
+              </div>
+
+              <div>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider">
+                    Texte exact à reproduire au clavier *
+                  </label>
+                  {editTheme === 'Python' && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const formatted = formatPythonCode(editTargetText);
+                        setEditTargetText(formatted);
+                      }}
+                      className="inline-flex items-center gap-1 text-[11px] font-bold text-amber-700 hover:text-amber-900 bg-amber-50 hover:bg-amber-100 px-2 py-0.5 rounded-lg border border-amber-200 transition-colors"
+                      title="Mettre en forme le code Python aux normes PEP 8"
+                    >
+                      <Sparkles className="w-3 h-3 text-amber-600" />
+                      <span>Formater script Python (PEP 8)</span>
+                    </button>
+                  )}
+                </div>
+                <textarea
+                  required
+                  rows={4}
+                  value={editTargetText}
+                  onChange={(e) => setEditTargetText(e.target.value)}
+                  className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 text-xs font-mono text-slate-900 focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none resize-y"
+                />
+                {editTheme === 'Python' && (
+                  <p className="text-[11px] text-amber-700 mt-1">
+                    ✓ Le script sera automatiquement mis en forme aux normes PEP 8 lors de l'enregistrement.
+                  </p>
+                )}
+              </div>
+
+              <div className="flex items-center justify-end gap-3 pt-3 border-t border-slate-200">
+                <button
+                  type="button"
+                  onClick={() => setEditingTest(null)}
+                  className="px-4 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold cursor-pointer"
+                >
+                  Annuler
+                </button>
+                <button
+                  type="submit"
+                  disabled={isUpdatingTest}
+                  className="px-5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold shadow-md shadow-indigo-600/20 cursor-pointer disabled:opacity-50"
+                >
+                  {isUpdatingTest ? 'Mise à jour en cours...' : 'Enregistrer les modifications'}
                 </button>
               </div>
             </form>
