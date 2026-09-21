@@ -16,7 +16,8 @@ import {
   AttendanceStatus,
   AttendanceRecord,
   AttendanceSession,
-  StudentAttendanceSummary
+  StudentAttendanceSummary,
+  SessionStatus
 } from './types';
 
 const API_BASE = '/api';
@@ -50,8 +51,18 @@ async function safeFetchJson<T>(
     // Non-JSON response (HTML page or error page)
     await res.text().catch(() => '');
     if (!res.ok) {
-      if (res.status === 401 || res.status === 403) {
-        throw new Error('Session expirée ou non autorisée. Veuillez vous reconnecter.');
+      if (res.status === 401) {
+        if (typeof window !== 'undefined') {
+          window.dispatchEvent(
+            new CustomEvent('intranet:session_expired', {
+              detail: { message: 'Votre session de 30 minutes est expirée. Veuillez vous reconnecter.' }
+            })
+          );
+        }
+        throw new Error('Session expirée (durée maximale : 30 minutes). Veuillez vous reconnecter.');
+      }
+      if (res.status === 403) {
+        throw new Error('Accès refusé ou privilèges insuffisants.');
       }
       if (res.status === 404) {
         throw new Error('Ressource introuvable sur le serveur intranet.');
@@ -64,8 +75,18 @@ async function safeFetchJson<T>(
   }
 
   if (!res.ok) {
-    if (res.status === 401 || res.status === 403) {
-      throw new Error(payload?.error || 'Session expirée ou non autorisée. Veuillez vous reconnecter.');
+    if (res.status === 401) {
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(
+          new CustomEvent('intranet:session_expired', {
+            detail: { message: payload?.error || 'Votre session de 30 minutes est expirée. Veuillez vous reconnecter.' }
+          })
+        );
+      }
+      throw new Error(payload?.error || 'Session expirée (durée maximale : 30 minutes). Veuillez vous reconnecter.');
+    }
+    if (res.status === 403) {
+      throw new Error(payload?.error || 'Accès refusé pour cette opération.');
     }
     const message = payload?.error || defaultErrorMessage;
     throw new Error(message);
@@ -92,9 +113,27 @@ export const api = {
     );
   },
 
+  // Session & Authentication
+  async getSessionStatus(token: string): Promise<SessionStatus> {
+    return safeFetchJson<SessionStatus>(
+      `${API_BASE}/auth/session/status`,
+      {
+        headers: { Authorization: `Bearer ${token}` }
+      },
+      'Impossible de vérifier l’état de la session'
+    );
+  },
+
   // Student Auth
   async studentLogin(classId: string, studentId: string, password: string) {
-    return safeFetchJson<{ token: string; profile: Student; classInfo: ClassGroup }>(
+    return safeFetchJson<{
+      token: string;
+      profile: Student;
+      classInfo: ClassGroup;
+      expiresAt?: number;
+      expiresIn?: number;
+      durationMinutes?: number;
+    }>(
       `${API_BASE}/auth/student/login`,
       {
         method: 'POST',
@@ -132,7 +171,13 @@ export const api = {
 
   // Teacher Auth
   async teacherLogin(username: string, password: string) {
-    return safeFetchJson<{ token: string; teacher: TeacherUser }>(
+    return safeFetchJson<{
+      token: string;
+      teacher: TeacherUser;
+      expiresAt?: number;
+      expiresIn?: number;
+      durationMinutes?: number;
+    }>(
       `${API_BASE}/auth/teacher/login`,
       {
         method: 'POST',

@@ -1,12 +1,13 @@
-import React from 'react';
-import { GraduationCap, ShieldCheck, LogOut, School } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { GraduationCap, ShieldCheck, LogOut, School, Clock } from 'lucide-react';
 import { Student, TeacherUser } from '../types';
 
 interface HeaderProps {
   currentView: 'student' | 'teacher' | 'student-login' | 'teacher-login';
   currentPath: string;
-  studentSession: { student: Student; token: string } | null;
-  teacherSession: { teacher: TeacherUser; token: string } | null;
+  studentSession: { student: Student; token: string; expiresAt?: number } | null;
+  teacherSession: { teacher: TeacherUser; token: string; expiresAt?: number } | null;
+  sessionExpiresAt?: number | null;
   onLogoutStudent: () => void;
   onLogoutTeacher: () => void;
   onNavigateHome: () => void;
@@ -18,10 +19,38 @@ export const Header: React.FC<HeaderProps> = ({
   currentPath,
   studentSession,
   teacherSession,
+  sessionExpiresAt,
   onLogoutStudent,
   onLogoutTeacher,
   onNavigateHome
 }) => {
+  // Session countdown timer state
+  const [remainingSec, setRemainingSec] = useState<number | null>(null);
+
+  useEffect(() => {
+    if (!sessionExpiresAt) {
+      setRemainingSec(null);
+      return;
+    }
+
+    const updateTimer = () => {
+      const diff = Math.max(0, Math.floor((sessionExpiresAt - Date.now()) / 1000));
+      setRemainingSec(diff);
+    };
+
+    updateTimer();
+    const interval = setInterval(updateTimer, 1000);
+    return () => clearInterval(interval);
+  }, [sessionExpiresAt]);
+
+  const formatSessionTime = (seconds: number) => {
+    const mins = Math.floor(seconds / 60);
+    const secs = seconds % 60;
+    return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+  };
+
+  const isWarningTime = remainingSec !== null && remainingSec <= 300; // Less than 5 minutes
+
   return (
     <header className="bg-slate-900 border-b border-slate-800 text-white sticky top-0 z-40 shadow-sm">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
@@ -49,6 +78,24 @@ export const Header: React.FC<HeaderProps> = ({
 
           {/* Right Area */}
           <div className="flex items-center gap-3">
+            {/* Session Timer Badge when authenticated */}
+            {remainingSec !== null && (studentSession || teacherSession) && (
+              <div
+                title="Durée de session limitée à 30 minutes pour votre sécurité"
+                className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-mono transition-colors border ${
+                  isWarningTime
+                    ? 'bg-amber-950/70 border-amber-600/70 text-amber-300 animate-pulse'
+                    : 'bg-slate-800/80 border-slate-700/80 text-slate-300'
+                }`}
+              >
+                <Clock className={`w-3.5 h-3.5 ${isWarningTime ? 'text-amber-400' : 'text-slate-400'}`} />
+                <span className="hidden md:inline text-[11px] font-sans font-normal text-slate-400 mr-0.5">
+                  Session :
+                </span>
+                <span className="font-semibold">{formatSessionTime(remainingSec)}</span>
+              </div>
+            )}
+
             {/* Student Session Active */}
             {studentSession && currentView === 'student' && (
               <div className="flex items-center gap-3">

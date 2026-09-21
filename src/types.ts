@@ -50,6 +50,30 @@ export interface AuthStudentSession {
   token: string;
   student: Student;
   classInfo: ClassGroup;
+  loginTime?: number;
+  expiresAt?: number;
+  durationMinutes?: number;
+}
+
+export interface AuthTeacherSession {
+  token: string;
+  teacher: TeacherUser;
+  loginTime?: number;
+  expiresAt?: number;
+  durationMinutes?: number;
+}
+
+export interface SessionStatus {
+  valid: boolean;
+  role?: 'teacher' | 'student';
+  id?: string;
+  name?: string;
+  createdAt?: number;
+  expiresAt?: number;
+  remainingSeconds?: number;
+  remainingMinutes?: number;
+  durationMinutes?: number;
+  error?: string;
 }
 
 export interface Course {

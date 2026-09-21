@@ -8,26 +8,47 @@ async function startServer() {
   const app = express();
   const PORT = 3000;
   const TOKEN_SECRET = 'intranet_school_secure_token_secret_key_2024';
+  const SESSION_DURATION_MS = 30 * 60 * 1000; // Limite stricte de durée de session : 30 minutes
 
   app.use(express.json());
 
-  // In-memory cache for fast lookup
-  const activeSessions = new Map<string, { role: 'teacher' | 'student'; id: string; name: string }>();
-
-  function createToken(role: 'teacher' | 'student', id: string, name: string): string {
-    const payload = Buffer.from(JSON.stringify({ role, id, name, t: Date.now() })).toString('base64url');
-    const signature = crypto.createHmac('sha256', TOKEN_SECRET).update(payload).digest('base64url');
-    const token = `tok_${role}_${payload}_${signature}`;
-    activeSessions.set(token, { role, id, name });
-    return token;
+  interface ActiveSession {
+    role: 'teacher' | 'student';
+    id: string;
+    name: string;
+    createdAt: number;
+    expiresAt: number;
   }
 
-  function verifyToken(token: string): { role: 'teacher' | 'student'; id: string; name: string } | null {
+  // In-memory cache for fast lookup with expiration timestamps
+  const activeSessions = new Map<string, ActiveSession>();
+
+  function createToken(role: 'teacher' | 'student', id: string, name: string): { token: string; expiresAt: number; expiresIn: number } {
+    const now = Date.now();
+    const expiresAt = now + SESSION_DURATION_MS;
+    const payload = Buffer.from(JSON.stringify({ role, id, name, t: now, exp: expiresAt })).toString('base64url');
+    const signature = crypto.createHmac('sha256', TOKEN_SECRET).update(payload).digest('base64url');
+    const token = `tok_${role}_${payload}_${signature}`;
+    activeSessions.set(token, { role, id, name, createdAt: now, expiresAt });
+    return {
+      token,
+      expiresAt,
+      expiresIn: Math.floor(SESSION_DURATION_MS / 1000)
+    };
+  }
+
+  function verifyToken(token: string): ActiveSession | null {
     if (!token) return null;
+    const now = Date.now();
 
     // Check cache
     if (activeSessions.has(token)) {
-      return activeSessions.get(token)!;
+      const cached = activeSessions.get(token)!;
+      if (now > cached.expiresAt) {
+        activeSessions.delete(token);
+        return null; // Session expirée après 30 minutes
+      }
+      return cached;
     }
 
     // Check signed token format
@@ -39,8 +60,20 @@ async function startServer() {
         if (signature === expectedSignature) {
           try {
             const data = JSON.parse(Buffer.from(payload, 'base64url').toString('utf-8'));
+            const createdAt = typeof data.t === 'number' ? data.t : now;
+            const expiresAt = typeof data.exp === 'number' ? data.exp : (createdAt + SESSION_DURATION_MS);
+            // Vérification de la limite de 30 minutes
+            if (now > expiresAt) {
+              return null; // Session expirée
+            }
             if (data.role === role) {
-              const session = { role: data.role, id: data.id, name: data.name };
+              const session: ActiveSession = {
+                role: data.role,
+                id: data.id,
+                name: data.name,
+                createdAt,
+                expiresAt
+              };
               activeSessions.set(token, session);
               return session;
             }
@@ -51,33 +84,18 @@ async function startServer() {
       }
     }
 
-    // Support backward-compatibility with previously issued tokens (e.g. teacher_prof_...)
-    if (token.startsWith('teacher_')) {
-      const teacher = db.getTeacher();
-      const session = { role: 'teacher' as const, id: teacher.username, name: teacher.fullName };
-      activeSessions.set(token, session);
-      return session;
-    }
-
-    if (token.startsWith('student_')) {
-      const parts = token.split('_');
-      const studentId = parts[1];
-      if (studentId) {
-        const student = db.getStudentById(studentId);
-        if (student) {
-          const session = {
-            role: 'student' as const,
-            id: student.id,
-            name: `${student.firstName} ${student.lastName}`
-          };
-          activeSessions.set(token, session);
-          return session;
-        }
-      }
-    }
-
     return null;
   }
+
+  // Nettoyage périodique des sessions expirées toutes les 60 secondes
+  setInterval(() => {
+    const now = Date.now();
+    for (const [key, session] of activeSessions.entries()) {
+      if (now > session.expiresAt) {
+        activeSessions.delete(key);
+      }
+    }
+  }, 60 * 1000);
 
   // Middleware to authenticate teacher
   function requireTeacher(req: express.Request, res: express.Response, next: express.NextFunction) {
@@ -85,11 +103,17 @@ async function startServer() {
     const tokenQuery = req.query.token as string | undefined;
     const token = authHeader ? authHeader.replace('Bearer ', '').trim() : tokenQuery;
     if (!token) {
-      return res.status(401).json({ error: 'Accès non autorisé: jeton manquant' });
+      return res.status(401).json({ error: 'Accès non autorisé: jeton manquant', code: 'UNAUTHORIZED' });
     }
     const session = verifyToken(token);
-    if (!session || session.role !== 'teacher') {
-      return res.status(403).json({ error: 'Accès réservé aux professeurs' });
+    if (!session) {
+      return res.status(401).json({
+        error: 'Session expirée (durée maximale : 30 minutes) ou invalide. Veuillez vous reconnecter.',
+        code: 'SESSION_EXPIRED'
+      });
+    }
+    if (session.role !== 'teacher') {
+      return res.status(403).json({ error: 'Accès réservé aux professeurs', code: 'FORBIDDEN' });
     }
     next();
   }
@@ -99,12 +123,18 @@ async function startServer() {
   function requireStudent(req: express.Request, res: express.Response, next: express.NextFunction) {
     const authHeader = req.headers.authorization;
     if (!authHeader) {
-      return res.status(401).json({ error: 'Accès non autorisé: jeton manquant' });
+      return res.status(401).json({ error: 'Accès non autorisé: jeton manquant', code: 'UNAUTHORIZED' });
     }
     const token = authHeader.replace('Bearer ', '').trim();
     const session = verifyToken(token);
-    if (!session || session.role !== 'student') {
-      return res.status(403).json({ error: 'Accès réservé à l’élève connecté' });
+    if (!session) {
+      return res.status(401).json({
+        error: 'Session expirée (durée maximale : 30 minutes) ou invalide. Veuillez vous reconnecter.',
+        code: 'SESSION_EXPIRED'
+      });
+    }
+    if (session.role !== 'student') {
+      return res.status(403).json({ error: 'Accès réservé à l’élève connecté', code: 'FORBIDDEN' });
     }
     (req as any).studentId = session.id;
     next();
@@ -114,12 +144,15 @@ async function startServer() {
   function requireAuth(req: express.Request, res: express.Response, next: express.NextFunction) {
     const authHeader = req.headers.authorization;
     if (!authHeader) {
-      return res.status(401).json({ error: 'Accès non autorisé: jeton manquant' });
+      return res.status(401).json({ error: 'Accès non autorisé: jeton manquant', code: 'UNAUTHORIZED' });
     }
     const token = authHeader.replace('Bearer ', '').trim();
     const session = verifyToken(token);
     if (!session) {
-      return res.status(403).json({ error: 'Session invalide ou expirée' });
+      return res.status(401).json({
+        error: 'Session expirée (durée maximale : 30 minutes) ou invalide. Veuillez vous reconnecter.',
+        code: 'SESSION_EXPIRED'
+      });
     }
     (req as any).user = session;
     if (session.role === 'student') {
@@ -186,9 +219,12 @@ async function startServer() {
       return res.status(401).json({ error: 'Identifiant ou mot de passe enseignant incorrect' });
     }
 
-    const token = createToken('teacher', teacher.username, teacher.fullName);
+    const sessionData = createToken('teacher', teacher.username, teacher.fullName);
     res.json({
-      token,
+      token: sessionData.token,
+      expiresAt: sessionData.expiresAt,
+      expiresIn: sessionData.expiresIn,
+      durationMinutes: 30,
       teacher: {
         username: teacher.username,
         fullName: teacher.fullName,
@@ -210,7 +246,7 @@ async function startServer() {
     }
 
     const { student, classInfo } = authResult;
-    const token = createToken('student', student.id, `${student.firstName} ${student.lastName}`);
+    const sessionData = createToken('student', student.id, `${student.firstName} ${student.lastName}`);
 
     // Return student profile without exposing full internal password hashes
     const studentProfile = {
@@ -234,9 +270,42 @@ async function startServer() {
     };
 
     res.json({
-      token,
+      token: sessionData.token,
+      expiresAt: sessionData.expiresAt,
+      expiresIn: sessionData.expiresIn,
+      durationMinutes: 30,
       profile: studentProfile,
       classInfo
+    });
+  });
+
+  // Check current session status & remaining time (Teacher or Student)
+  app.get('/api/auth/session/status', (req, res) => {
+    const authHeader = req.headers.authorization;
+    const tokenQuery = req.query.token as string | undefined;
+    const token = authHeader ? authHeader.replace('Bearer ', '').trim() : tokenQuery;
+    if (!token) {
+      return res.status(401).json({ valid: false, error: 'Jeton de session manquant', code: 'UNAUTHORIZED' });
+    }
+    const session = verifyToken(token);
+    if (!session) {
+      return res.status(401).json({
+        valid: false,
+        error: 'Session expirée (durée maximale : 30 minutes). Veuillez vous reconnecter.',
+        code: 'SESSION_EXPIRED'
+      });
+    }
+    const remainingMs = Math.max(0, session.expiresAt - Date.now());
+    res.json({
+      valid: true,
+      role: session.role,
+      id: session.id,
+      name: session.name,
+      createdAt: session.createdAt,
+      expiresAt: session.expiresAt,
+      remainingSeconds: Math.floor(remainingMs / 1000),
+      remainingMinutes: Math.ceil(remainingMs / (60 * 1000)),
+      durationMinutes: 30
     });
   });
 
