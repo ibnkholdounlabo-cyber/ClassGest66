@@ -866,8 +866,8 @@ export const TeacherAttendanceSection: React.FC<TeacherAttendanceSectionProps> =
                   </div>
                 </div>
 
-                {/* Roll Call Students List */}
-                <div className="divide-y divide-slate-100 max-h-[580px] overflow-y-auto">
+                {/* Roll Call Students Table */}
+                <div className="overflow-x-auto max-h-[600px] overflow-y-auto border-t border-slate-100">
                   {currentSession.records.length === 0 ? (
                     <div className="p-8 text-center text-slate-400 text-xs">
                       Aucun élève dans cette classe. Ajoutez d'abord des élèves à la classe.
@@ -878,179 +878,279 @@ export const TeacherAttendanceSection: React.FC<TeacherAttendanceSectionProps> =
                       <p className="font-semibold">Aucun élève ne correspond aux critères de filtre</p>
                     </div>
                   ) : (
-                    filteredRollRecords.map((rec, index) => {
-                      const edit = recordEdits[rec.studentId] || {
-                        status: rec.status,
-                        notes: '',
-                        options: [],
-                        score: 0
-                      };
-                      const status = edit.status;
-                      const score = edit.score || 0;
-                      const isRepeating = rec.isRepeating;
+                    <table className="w-full text-left border-collapse text-xs min-w-[1020px]">
+                      <thead className="bg-slate-50/95 sticky top-0 z-10 border-b border-slate-200 text-slate-600 font-bold uppercase tracking-wider text-[11px] select-none backdrop-blur-xs">
+                        <tr>
+                          <th className="py-3 px-2.5 text-center w-10">N°</th>
+                          <th className="py-3 px-3 min-w-[180px]">Nom & Prénom</th>
+                          <th className="py-3 px-3 text-center min-w-[260px]">Présence / Absence</th>
+                          <th className="py-3 px-2 text-center w-28" title="Absence de cahier (-1 pt)">Cahier</th>
+                          <th className="py-3 px-2 text-center w-24" title="Élève exclu de cours (-3 pts)">Exclu</th>
+                          <th className="py-3 px-2 min-w-[170px]">Autres sanctions / Bonus</th>
+                          <th className="py-3 px-2 text-center w-24">Score</th>
+                          <th className="py-3 px-3 min-w-[180px]">Observations</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100 bg-white">
+                        {filteredRollRecords.map((rec, index) => {
+                          const edit = recordEdits[rec.studentId] || {
+                            status: rec.status,
+                            notes: '',
+                            options: [],
+                            score: 0
+                          };
+                          const status = edit.status;
+                          const score = edit.score || 0;
+                          const isRepeating = rec.isRepeating;
+                          const hasNoCahier = edit.options.includes('absence_cahier');
+                          const isExclu = edit.options.includes('exclu');
 
-                      return (
-                        <div
-                          key={rec.studentId}
-                          className="p-3.5 hover:bg-slate-50/80 transition-colors space-y-2.5"
-                        >
-                          {/* Row 1: Student info & Status Buttons */}
-                          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-                            <div className="flex items-center gap-2.5 min-w-[200px]">
-                              <span className="text-xs font-mono text-slate-400 w-5 text-right">{index + 1}.</span>
-                              <div>
-                                <div className="flex items-center gap-2">
-                                  <span className="font-bold text-xs sm:text-sm text-slate-900">
-                                    {rec.studentName}
+                          const otherSelectedOptions = edit.options.filter(
+                            (k) => k !== 'absence_cahier' && k !== 'exclu'
+                          );
+                          const availableOptions = DISCIPLINE_OPTIONS.filter(
+                            (opt) => opt.key !== 'absence_cahier' && opt.key !== 'exclu' && !edit.options.includes(opt.key)
+                          );
+
+                          return (
+                            <tr
+                              key={rec.studentId}
+                              className={`hover:bg-slate-50/80 transition-colors ${
+                                status === 'absent'
+                                  ? 'bg-rose-50/20'
+                                  : isExclu
+                                  ? 'bg-red-50/30'
+                                  : ''
+                              }`}
+                            >
+                              {/* 1. N° */}
+                              <td className="py-2.5 px-2.5 text-center font-mono text-slate-400 font-semibold">
+                                {index + 1}
+                              </td>
+
+                              {/* 2. Nom & Prénom */}
+                              <td className="py-2.5 px-3">
+                                <div className="flex flex-col">
+                                  <div className="flex items-center gap-1.5 flex-wrap">
+                                    <span className="font-bold text-xs sm:text-sm text-slate-900 leading-snug">
+                                      {rec.studentName}
+                                    </span>
+                                    {isRepeating ? (
+                                      <span className="px-1.5 py-0.2 rounded text-[10px] font-bold bg-amber-100 text-amber-800 border border-amber-200 whitespace-nowrap">
+                                        Redoublant
+                                      </span>
+                                    ) : (
+                                      <span className="px-1.5 py-0.2 rounded text-[10px] font-bold bg-emerald-100 text-emerald-800 border border-emerald-200 whitespace-nowrap">
+                                        Nouveau
+                                      </span>
+                                    )}
+                                  </div>
+                                  <span className="text-[11px] text-slate-500 font-mono">
+                                    N° {rec.studentNumber}
                                   </span>
-                                  {isRepeating ? (
-                                    <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-100 text-amber-800 border border-amber-200">
-                                      Redoublant
-                                    </span>
+                                </div>
+                              </td>
+
+                              {/* 3. Présence / Absence */}
+                              <td className="py-2.5 px-3 text-center">
+                                <div className="inline-flex items-center justify-center p-0.5 bg-slate-100/90 rounded-lg gap-0.5 border border-slate-200/60">
+                                  <button
+                                    type="button"
+                                    onClick={() => updateSingleRecordStatus(rec.studentId, 'present')}
+                                    className={`px-2 py-1 rounded-md text-[11px] font-bold transition-all cursor-pointer flex items-center gap-1 ${
+                                      status === 'present'
+                                        ? 'bg-emerald-600 text-white shadow-xs'
+                                        : 'text-slate-600 hover:text-emerald-700 hover:bg-emerald-50/80'
+                                    }`}
+                                    title="Marquer Présent"
+                                  >
+                                    <CheckCircle2 className="w-3 h-3" />
+                                    <span>Présent</span>
+                                  </button>
+
+                                  <button
+                                    type="button"
+                                    onClick={() => updateSingleRecordStatus(rec.studentId, 'absent')}
+                                    className={`px-2 py-1 rounded-md text-[11px] font-bold transition-all cursor-pointer flex items-center gap-1 ${
+                                      status === 'absent'
+                                        ? 'bg-rose-600 text-white shadow-xs'
+                                        : 'text-slate-600 hover:text-rose-700 hover:bg-rose-50/80'
+                                    }`}
+                                    title="Marquer Absent"
+                                  >
+                                    <XCircle className="w-3 h-3" />
+                                    <span>Absent</span>
+                                  </button>
+
+                                  <button
+                                    type="button"
+                                    onClick={() => updateSingleRecordStatus(rec.studentId, 'late')}
+                                    className={`px-2 py-1 rounded-md text-[11px] font-bold transition-all cursor-pointer flex items-center gap-1 ${
+                                      status === 'late'
+                                        ? 'bg-amber-500 text-white shadow-xs'
+                                        : 'text-slate-600 hover:text-amber-700 hover:bg-amber-50/80'
+                                    }`}
+                                    title="Marquer en Retard"
+                                  >
+                                    <Clock className="w-3 h-3" />
+                                    <span>Retard</span>
+                                  </button>
+
+                                  <button
+                                    type="button"
+                                    onClick={() => updateSingleRecordStatus(rec.studentId, 'excused')}
+                                    className={`px-2 py-1 rounded-md text-[11px] font-bold transition-all cursor-pointer flex items-center gap-1 ${
+                                      status === 'excused'
+                                        ? 'bg-sky-600 text-white shadow-xs'
+                                        : 'text-slate-600 hover:text-sky-700 hover:bg-sky-50/80'
+                                    }`}
+                                    title="Marquer Excusé"
+                                  >
+                                    <FileText className="w-3 h-3" />
+                                    <span>Excusé</span>
+                                  </button>
+                                </div>
+                              </td>
+
+                              {/* 4. Cahier (Sans cahier -1) */}
+                              <td className="py-2.5 px-2 text-center">
+                                <button
+                                  type="button"
+                                  onClick={() => toggleDisciplineOption(rec.studentId, 'absence_cahier')}
+                                  className={`inline-flex items-center justify-center gap-1 px-2 py-1 rounded-lg text-[11px] font-bold transition-all cursor-pointer border ${
+                                    hasNoCahier
+                                      ? 'bg-rose-600 text-white border-rose-700 shadow-xs ring-2 ring-rose-200'
+                                      : 'bg-slate-50 text-slate-500 border-slate-200 hover:bg-rose-50 hover:text-rose-700 hover:border-rose-200'
+                                  }`}
+                                  title={hasNoCahier ? "Cliquer pour annuler l'oubli de cahier (+1 pt)" : "Signaler une absence de cahier (-1 pt)"}
+                                >
+                                  {hasNoCahier ? (
+                                    <>
+                                      <BookX className="w-3 h-3 text-white" />
+                                      <span>Oublié (-1)</span>
+                                    </>
                                   ) : (
-                                    <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-800 border border-emerald-200">
-                                      Nouveau
-                                    </span>
+                                    <>
+                                      <Check className="w-3 h-3 text-emerald-500" />
+                                      <span className="text-slate-500 font-medium">Présent</span>
+                                    </>
+                                  )}
+                                </button>
+                              </td>
+
+                              {/* 5. Exclu (Exclu de cours -3) */}
+                              <td className="py-2.5 px-2 text-center">
+                                <button
+                                  type="button"
+                                  onClick={() => toggleDisciplineOption(rec.studentId, 'exclu')}
+                                  className={`inline-flex items-center justify-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-bold transition-all cursor-pointer border ${
+                                    isExclu
+                                      ? 'bg-red-700 text-white border-red-800 shadow-xs ring-2 ring-red-200'
+                                      : 'bg-slate-50 text-slate-400 border-slate-200 hover:bg-red-50 hover:text-red-700 hover:border-red-200'
+                                  }`}
+                                  title={isExclu ? "Cliquer pour annuler l'exclusion (+3 pts)" : "Exclure l'élève de cours (-3 pts)"}
+                                >
+                                  {isExclu ? (
+                                    <>
+                                      <UserX className="w-3 h-3 text-white" />
+                                      <span>Exclu (-3)</span>
+                                    </>
+                                  ) : (
+                                    <span className="font-normal">Non</span>
+                                  )}
+                                </button>
+                              </td>
+
+                              {/* 6. Autres sanctions / Bonus */}
+                              <td className="py-2.5 px-2">
+                                <div className="flex flex-wrap items-center gap-1 max-w-[220px]">
+                                  {otherSelectedOptions.map((key) => {
+                                    const optDef = DISCIPLINE_OPTIONS.find((o) => o.key === key);
+                                    if (!optDef) return null;
+                                    return (
+                                      <button
+                                        key={key}
+                                        type="button"
+                                        onClick={() => toggleDisciplineOption(rec.studentId, key)}
+                                        className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-bold border cursor-pointer transition-colors ${optDef.activeColor}`}
+                                        title={`Cliquer pour retirer : ${optDef.label}`}
+                                      >
+                                        <span>{optDef.shortLabel} ({optDef.defaultDelta > 0 ? `+${optDef.defaultDelta}` : optDef.defaultDelta})</span>
+                                        <X className="w-2.5 h-2.5 opacity-80 hover:opacity-100" />
+                                      </button>
+                                    );
+                                  })}
+
+                                  {availableOptions.length > 0 && (
+                                    <select
+                                      value=""
+                                      onChange={(e) => {
+                                        if (e.target.value) {
+                                          toggleDisciplineOption(rec.studentId, e.target.value);
+                                        }
+                                      }}
+                                      className="h-6 px-1.5 py-0 bg-slate-50 border border-slate-200 rounded text-[11px] text-slate-600 hover:border-slate-300 focus:outline-none cursor-pointer"
+                                      title="Ajouter une option disciplinaire ou un bonus"
+                                    >
+                                      <option value="">+ Option...</option>
+                                      {availableOptions.map((opt) => (
+                                        <option key={opt.key} value={opt.key}>
+                                          {opt.shortLabel} ({opt.defaultDelta > 0 ? `+${opt.defaultDelta}` : opt.defaultDelta})
+                                        </option>
+                                      ))}
+                                    </select>
                                   )}
                                 </div>
-                                <span className="text-[11px] text-slate-500 font-mono">
-                                  N° {rec.studentNumber}
-                                </span>
-                              </div>
-                            </div>
+                              </td>
 
-                            {/* Status Picker Buttons */}
-                            <div className="flex items-center gap-1">
-                              <button
-                                type="button"
-                                onClick={() => updateSingleRecordStatus(rec.studentId, 'present')}
-                                className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-all cursor-pointer flex items-center gap-1 ${
-                                  status === 'present'
-                                    ? 'bg-emerald-600 text-white shadow-xs ring-2 ring-emerald-300'
-                                    : 'bg-slate-100 hover:bg-slate-200 text-slate-600'
-                                }`}
-                              >
-                                <CheckCircle2 className="w-3 h-3" />
-                                <span>Présent</span>
-                              </button>
-
-                              <button
-                                type="button"
-                                onClick={() => updateSingleRecordStatus(rec.studentId, 'absent')}
-                                className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-all cursor-pointer flex items-center gap-1 ${
-                                  status === 'absent'
-                                    ? 'bg-rose-600 text-white shadow-xs ring-2 ring-rose-300'
-                                    : 'bg-slate-100 hover:bg-slate-200 text-slate-600'
-                                }`}
-                              >
-                                <XCircle className="w-3 h-3" />
-                                <span>Absent</span>
-                              </button>
-
-                              <button
-                                type="button"
-                                onClick={() => updateSingleRecordStatus(rec.studentId, 'late')}
-                                className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-all cursor-pointer flex items-center gap-1 ${
-                                  status === 'late'
-                                    ? 'bg-amber-500 text-white shadow-xs ring-2 ring-amber-300'
-                                    : 'bg-slate-100 hover:bg-slate-200 text-slate-600'
-                                }`}
-                              >
-                                <Clock className="w-3 h-3" />
-                                <span>Retard</span>
-                              </button>
-
-                              <button
-                                type="button"
-                                onClick={() => updateSingleRecordStatus(rec.studentId, 'excused')}
-                                className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-all cursor-pointer flex items-center gap-1 ${
-                                  status === 'excused'
-                                    ? 'bg-sky-600 text-white shadow-xs ring-2 ring-sky-300'
-                                    : 'bg-slate-100 hover:bg-slate-200 text-slate-600'
-                                }`}
-                              >
-                                <FileText className="w-3 h-3" />
-                                <span>Excusé</span>
-                              </button>
-                            </div>
-                          </div>
-
-                          {/* Row 2: Discipline Options & Scoring & Observations */}
-                          <div className="bg-slate-50/70 p-2.5 rounded-xl border border-slate-200/80 flex flex-col md:flex-row md:items-center justify-between gap-2.5 text-xs">
-                            {/* Discipline Checkboxes / Pills */}
-                            <div className="flex flex-wrap items-center gap-1.5">
-                              <span className="text-[11px] font-bold text-slate-500 mr-1 flex items-center gap-1">
-                                <ShieldAlert className="w-3 h-3 text-slate-400" />
-                                Options :
-                              </span>
-                              {DISCIPLINE_OPTIONS.map((opt) => {
-                                const isChecked = edit.options.includes(opt.key);
-                                return (
+                              {/* 7. Score */}
+                              <td className="py-2.5 px-2 text-center">
+                                <div className="inline-flex items-center justify-center gap-1 bg-slate-50 border border-slate-200 px-1 py-0.5 rounded-lg">
                                   <button
-                                    key={opt.key}
                                     type="button"
-                                    onClick={() => toggleDisciplineOption(rec.studentId, opt.key)}
-                                    title={`${opt.label} (${opt.defaultDelta > 0 ? `+${opt.defaultDelta}` : opt.defaultDelta} pt)`}
-                                    className={`px-2 py-0.5 rounded-md text-[11px] font-semibold border transition-all cursor-pointer ${
-                                      isChecked
-                                        ? opt.activeColor
-                                        : `${opt.badgeColor} hover:opacity-80`
+                                    onClick={() => adjustStudentScore(rec.studentId, -1)}
+                                    className="w-5 h-5 rounded bg-white hover:bg-rose-100 text-slate-600 hover:text-rose-700 font-bold flex items-center justify-center border border-slate-200 cursor-pointer text-xs transition-colors"
+                                    title="Diminuer le score (-1)"
+                                  >
+                                    -
+                                  </button>
+                                  <span
+                                    className={`text-xs font-extrabold min-w-[24px] text-center ${
+                                      score > 0
+                                        ? 'text-emerald-700'
+                                        : score < 0
+                                        ? 'text-rose-700'
+                                        : 'text-slate-600'
                                     }`}
                                   >
-                                    {isChecked ? '✓ ' : ''}
-                                    {opt.shortLabel} ({opt.defaultDelta > 0 ? `+${opt.defaultDelta}` : opt.defaultDelta})
+                                    {score > 0 ? `+${score}` : score}
+                                  </span>
+                                  <button
+                                    type="button"
+                                    onClick={() => adjustStudentScore(rec.studentId, +1)}
+                                    className="w-5 h-5 rounded bg-white hover:bg-emerald-100 text-slate-600 hover:text-emerald-700 font-bold flex items-center justify-center border border-slate-200 cursor-pointer text-xs transition-colors"
+                                    title="Augmenter le score (+1)"
+                                  >
+                                    +
                                   </button>
-                                );
-                              })}
-                            </div>
+                                </div>
+                              </td>
 
-                            {/* Score (+/-) and Quick Note Input */}
-                            <div className="flex items-center gap-2 self-end md:self-auto">
-                              {/* Score Pill and Buttons */}
-                              <div className="flex items-center gap-1 bg-white border border-slate-200 px-2 py-0.5 rounded-lg">
-                                <span className="text-[10px] text-slate-400 font-bold uppercase">Score</span>
-                                <button
-                                  type="button"
-                                  onClick={() => adjustStudentScore(rec.studentId, -1)}
-                                  className="w-4 h-4 rounded bg-slate-100 hover:bg-rose-100 text-slate-600 hover:text-rose-700 font-bold flex items-center justify-center cursor-pointer"
-                                  title="Diminuer le score (-1)"
-                                >
-                                  -
-                                </button>
-                                <span
-                                  className={`text-xs font-extrabold min-w-[20px] text-center ${
-                                    score > 0
-                                      ? 'text-emerald-700'
-                                      : score < 0
-                                      ? 'text-rose-700'
-                                      : 'text-slate-600'
-                                  }`}
-                                >
-                                  {score > 0 ? `+${score}` : score}
-                                </span>
-                                <button
-                                  type="button"
-                                  onClick={() => adjustStudentScore(rec.studentId, +1)}
-                                  className="w-4 h-4 rounded bg-slate-100 hover:bg-emerald-100 text-slate-600 hover:text-emerald-700 font-bold flex items-center justify-center cursor-pointer"
-                                  title="Augmenter le score (+1)"
-                                >
-                                  +
-                                </button>
-                              </div>
-
-                              {/* Note Input */}
-                              <input
-                                type="text"
-                                value={edit.notes}
-                                onChange={(e) => updateSingleRecordNote(rec.studentId, e.target.value)}
-                                placeholder="Observations (ex: bavarde au fond, cahier oublié...)"
-                                className="text-xs px-2.5 py-1 bg-white border border-slate-200 rounded-lg focus:ring-1 focus:ring-indigo-500 text-slate-700 w-48 md:w-56"
-                              />
-                            </div>
-                          </div>
-                        </div>
-                      );
-                    })
+                              {/* 8. Observations */}
+                              <td className="py-2.5 px-3">
+                                <input
+                                  type="text"
+                                  value={edit.notes}
+                                  onChange={(e) => updateSingleRecordNote(rec.studentId, e.target.value)}
+                                  placeholder="Observations..."
+                                  className="w-full text-xs px-2.5 py-1 bg-slate-50 focus:bg-white border border-slate-200 focus:border-indigo-500 rounded-lg focus:ring-1 focus:ring-indigo-500 text-slate-700 transition-colors"
+                                />
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
                   )}
                 </div>
               </div>
