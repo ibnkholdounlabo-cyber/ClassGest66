@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
   HelpCircle,
   Plus,
@@ -28,7 +28,8 @@ import {
   ArrowUpDown,
   ArrowUp,
   ArrowDown,
-  SlidersHorizontal
+  SlidersHorizontal,
+  Loader2
 } from 'lucide-react';
 import { api } from '../api';
 import { QCM, QCMQuestion, QCMEvaluationSummary, QCMSubmission, ClassGroup } from '../types';
@@ -114,6 +115,19 @@ export const TeacherQCMSection: React.FC<TeacherQCMSectionProps> = ({
   const [availableClasses, setAvailableClasses] = useState<ClassGroup[]>(classes || []);
   const [formSelectedClassIds, setFormSelectedClassIds] = useState<string[]>([]);
 
+  // Robust form & action states
+  const [modalError, setModalError] = useState<string | null>(null);
+  const [isSavingQcm, setIsSavingQcm] = useState(false);
+  const [importError, setImportError] = useState<string | null>(null);
+  const [singleQuestionError, setSingleQuestionError] = useState<string | null>(null);
+  const [isAddingQuestion, setIsAddingQuestion] = useState(false);
+
+  // Live parsed questions for create modal
+  const initialParseResult = useMemo(() => {
+    if (!formInitialQuestions.trim()) return null;
+    return parseQcmImportText(formInitialQuestions);
+  }, [formInitialQuestions]);
+
   useEffect(() => {
     if (classes && classes.length > 0) {
       setAvailableClasses(classes);
@@ -145,7 +159,8 @@ export const TeacherQCMSection: React.FC<TeacherQCMSectionProps> = ({
   };
 
   const selectCurrentClassOnly = () => {
-    setFormSelectedClassIds([classId]);
+    const cid = classId || (availableClasses[0]?.id ?? '');
+    setFormSelectedClassIds(cid ? [cid] : []);
   };
 
   useEffect(() => {
@@ -183,7 +198,19 @@ export const TeacherQCMSection: React.FC<TeacherQCMSectionProps> = ({
     setFormTotalPoints(20);
     setFormIsActive(true);
     setFormInitialQuestions('');
-    setFormSelectedClassIds([classId]);
+    setModalError(null);
+    setIsSavingQcm(false);
+
+    // Ensure we have at least one valid class selected
+    const initialClassId = classId || availableClasses[0]?.id || (classes && classes[0]?.id) || '';
+    if (initialClassId) {
+      setFormSelectedClassIds([initialClassId]);
+    } else if (availableClasses.length > 0) {
+      setFormSelectedClassIds(availableClasses.map(c => c.id));
+    } else {
+      setFormSelectedClassIds([]);
+    }
+
     setEditingQcm(null);
     setShowCreateModal(true);
   };
@@ -197,61 +224,90 @@ export const TeacherQCMSection: React.FC<TeacherQCMSectionProps> = ({
     setFormTotalPoints(qcm.totalPoints || 20);
     setFormIsActive(qcm.isActive);
     setFormInitialQuestions('');
-    const assignedIds = qcm.classIds && qcm.classIds.length > 0 ? qcm.classIds : [qcm.classId];
-    setFormSelectedClassIds(assignedIds);
+    setModalError(null);
+    setIsSavingQcm(false);
+
+    const assignedIds = qcm.classIds && qcm.classIds.length > 0
+      ? qcm.classIds
+      : (qcm.classId ? [qcm.classId] : []);
+    setFormSelectedClassIds(assignedIds.filter(Boolean));
     setShowCreateModal(true);
   };
 
   const handleSaveQCM = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!formTitle.trim()) {
-      notifyError('Le titre du QCM est obligatoire');
+    setModalError(null);
+
+    const trimmedTitle = formTitle.trim();
+    if (!trimmedTitle) {
+      setModalError('Le titre du QCM est obligatoire.');
       return;
     }
 
-    if (formSelectedClassIds.length === 0) {
-      notifyError('Veuillez cocher au moins une classe autorisée à voir ce QCM.');
+    const validClassIds = formSelectedClassIds.filter(Boolean);
+    if (validClassIds.length === 0) {
+      setModalError('Veuillez cocher au moins une classe autorisée à voir ce QCM.');
       return;
+    }
+
+    // If initial questions provided in create mode, validate that at least one question is recognized
+    if (!editingQcm && formInitialQuestions.trim()) {
+      const parsed = parseQcmImportText(formInitialQuestions);
+      if (parsed.questions.length > 0 && parsed.validCount === 0) {
+        setModalError('Toutes les questions saisies sont incomplètes ou non reconnues. Vérifiez la syntaxe (format tube « | », tableau Excel, ou liste A/B/C/D).');
+        return;
+      }
     }
 
     try {
+      setIsSavingQcm(true);
+
       if (editingQcm) {
         await api.teacherUpdateQCM(token, editingQcm.id, {
-          title: formTitle.trim(),
+          title: trimmedTitle,
           category: formCategory,
           description: formDescription.trim(),
           durationMinutes: Number(formDurationMinutes),
           totalPoints: Number(formTotalPoints),
           isActive: formIsActive,
-          classIds: formSelectedClassIds
+          classIds: validClassIds
         });
-        notifySuccess(`QCM "${formTitle}" mis à jour avec succès (${formSelectedClassIds.length} classe${formSelectedClassIds.length > 1 ? 's' : ''} assignée${formSelectedClassIds.length > 1 ? 's' : ''}).`);
+        notifySuccess(`QCM "${trimmedTitle}" mis à jour avec succès (${validClassIds.length} classe${validClassIds.length > 1 ? 's' : ''} assignée${validClassIds.length > 1 ? 's' : ''}).`);
       } else {
-        const created = await api.teacherCreateQCM(token, classId, {
-          title: formTitle.trim(),
+        const targetClass = classId || validClassIds[0] || availableClasses[0]?.id || 'default';
+        const created = await api.teacherCreateQCM(token, targetClass, {
+          title: trimmedTitle,
           category: formCategory,
           description: formDescription.trim(),
           durationMinutes: Number(formDurationMinutes),
           totalPoints: Number(formTotalPoints),
           isActive: formIsActive,
-          classIds: formSelectedClassIds
+          classIds: validClassIds
         });
 
         // If user also entered questions in the creation modal, import them now
+        let importedCount = 0;
         if (formInitialQuestions.trim()) {
           try {
-            await api.teacherImportQCMQuestions(token, created.id, formInitialQuestions.trim(), true);
+            const importRes = await api.teacherImportQCMQuestions(token, created.id, formInitialQuestions.trim(), true);
+            importedCount = importRes.questionCount || 0;
           } catch (importErr: any) {
             console.warn('Questions import error after creation:', importErr);
+            notifyError(`Le QCM a été créé, mais l'import des questions a échoué : ${importErr.message || 'Format invalide'}`);
           }
         }
-        notifySuccess(`QCM "${formTitle}" créé avec succès (${formSelectedClassIds.length} classe${formSelectedClassIds.length > 1 ? 's' : ''} assignée${formSelectedClassIds.length > 1 ? 's' : ''}) !`);
+
+        const importMsg = importedCount > 0 ? ` avec ${importedCount} question${importedCount > 1 ? 's' : ''}` : '';
+        notifySuccess(`QCM "${trimmedTitle}" créé avec succès${importMsg} (${validClassIds.length} classe${validClassIds.length > 1 ? 's' : ''}) !`);
       }
 
       setShowCreateModal(false);
       await loadQCMs();
     } catch (err: any) {
-      notifyError(err.message || 'Erreur lors de l’enregistrement');
+      console.error('Erreur enregistrement QCM:', err);
+      setModalError(err.message || 'Erreur lors de la création du QCM.');
+    } finally {
+      setIsSavingQcm(false);
     }
   };
 
@@ -295,6 +351,7 @@ export const TeacherQCMSection: React.FC<TeacherQCMSectionProps> = ({
     setImportTargetQcm(qcm);
     setImportText('');
     setImportReplace(true);
+    setImportError(null);
   };
 
   const handleExecuteImport = async () => {
@@ -302,6 +359,7 @@ export const TeacherQCMSection: React.FC<TeacherQCMSectionProps> = ({
 
     try {
       setImporting(true);
+      setImportError(null);
       const updated = await api.teacherImportQCMQuestions(token, importTargetQcm.id, importText, importReplace);
       notifySuccess(`${updated.questionCount || 0} questions importées avec succès dans "${importTargetQcm.title}" !`);
       setImportTargetQcm(null);
@@ -311,7 +369,7 @@ export const TeacherQCMSection: React.FC<TeacherQCMSectionProps> = ({
         await loadQuestionsForQcm(importTargetQcm.id);
       }
     } catch (err: any) {
-      alert(err.message || 'Erreur lors de l’importation');
+      setImportError(err.message || 'Erreur lors de l’importation des questions');
     } finally {
       setImporting(false);
     }
@@ -321,6 +379,7 @@ export const TeacherQCMSection: React.FC<TeacherQCMSectionProps> = ({
   const handleOpenQuestions = async (qcm: QCM) => {
     setManagingQcm(qcm);
     setShowAddQuestionForm(false);
+    setSingleQuestionError(null);
     await loadQuestionsForQcm(qcm.id);
   };
 
@@ -330,7 +389,7 @@ export const TeacherQCMSection: React.FC<TeacherQCMSectionProps> = ({
       const fullQcm = await api.getQCMById(token, qcmId);
       setManagingQuestions(fullQcm.questions || []);
     } catch (err: any) {
-      alert(err.message || 'Impossible de charger les questions');
+      notifyError(err.message || 'Impossible de charger les questions');
     } finally {
       setLoadingQuestions(false);
     }
@@ -338,12 +397,14 @@ export const TeacherQCMSection: React.FC<TeacherQCMSectionProps> = ({
 
   const handleAddSingleQuestion = async (e: React.FormEvent) => {
     e.preventDefault();
+    setSingleQuestionError(null);
     if (!managingQcm || !newQuestionText.trim() || !newOptionA.trim() || !newOptionB.trim()) {
-      alert('La question et au minimum les options A et B sont requises');
+      setSingleQuestionError('La question et au minimum les options A et B sont requises.');
       return;
     }
 
     try {
+      setIsAddingQuestion(true);
       await api.teacherAddQCMQuestion(token, managingQcm.id, {
         questionText: newQuestionText.trim(),
         optionA: newOptionA.trim(),
@@ -355,7 +416,7 @@ export const TeacherQCMSection: React.FC<TeacherQCMSectionProps> = ({
         explanation: newExplanation.trim() || undefined
       });
 
-      notifySuccess('Question ajoutée au QCM');
+      notifySuccess('Question ajoutée au QCM avec succès');
       // Reset form
       setNewQuestionText('');
       setNewOptionA('');
@@ -370,13 +431,14 @@ export const TeacherQCMSection: React.FC<TeacherQCMSectionProps> = ({
       await loadQuestionsForQcm(managingQcm.id);
       await loadQCMs();
     } catch (err: any) {
-      alert(err.message || 'Erreur lors de l’ajout de la question');
+      setSingleQuestionError(err.message || 'Erreur lors de l’ajout de la question');
+    } finally {
+      setIsAddingQuestion(false);
     }
   };
 
   const handleDeleteQuestion = async (questionId: string) => {
     if (!managingQcm) return;
-    if (!window.confirm('Supprimer cette question ?')) return;
 
     try {
       await api.teacherDeleteQCMQuestion(token, questionId);
@@ -384,7 +446,7 @@ export const TeacherQCMSection: React.FC<TeacherQCMSectionProps> = ({
       await loadQuestionsForQcm(managingQcm.id);
       await loadQCMs();
     } catch (err: any) {
-      alert(err.message || 'Erreur lors de la suppression de la question');
+      notifyError(err.message || 'Erreur lors de la suppression de la question');
     }
   };
 
@@ -397,7 +459,7 @@ export const TeacherQCMSection: React.FC<TeacherQCMSectionProps> = ({
       const summary = await api.teacherGetQCMEvaluations(token, qcm.id);
       setEvaluationData(summary);
     } catch (err: any) {
-      alert(err.message || 'Impossible de charger les résultats');
+      notifyError(err.message || 'Impossible de charger les résultats');
       setEvaluationQcm(null);
     } finally {
       setLoadingEvaluations(false);
@@ -982,6 +1044,13 @@ export const TeacherQCMSection: React.FC<TeacherQCMSectionProps> = ({
                   <span>Remplacer les questions existantes du QCM (sinon ajouter à la suite)</span>
                 </label>
               </div>
+
+              {importError && (
+                <div className="p-3 bg-rose-50 border border-rose-200 text-rose-800 rounded-xl text-xs flex items-center gap-2 font-medium">
+                  <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
+                  <span className="flex-1">{importError}</span>
+                </div>
+              )}
             </div>
 
             {/* Footer */}
@@ -1063,7 +1132,20 @@ export const TeacherQCMSection: React.FC<TeacherQCMSectionProps> = ({
               {/* Add Question Form */}
               {showAddQuestionForm && (
                 <form onSubmit={handleAddSingleQuestion} className="p-4 rounded-2xl bg-slate-50 border border-slate-200 space-y-3 text-xs">
-                  <h4 className="font-bold text-slate-800 text-sm">Nouvelle Question</h4>
+                  <div className="flex items-center justify-between">
+                    <h4 className="font-bold text-slate-800 text-sm">Nouvelle Question</h4>
+                    {singleQuestionError && (
+                      <span className="text-[11px] text-rose-600 font-semibold">{singleQuestionError}</span>
+                    )}
+                  </div>
+
+                  {singleQuestionError && (
+                    <div className="p-2.5 bg-rose-50 border border-rose-200 text-rose-800 rounded-xl text-xs flex items-center gap-2 font-medium">
+                      <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
+                      <span className="flex-1">{singleQuestionError}</span>
+                    </div>
+                  )}
+
                   <div>
                     <label className="block font-semibold text-slate-700 mb-1">Énoncé de la question *</label>
                     <input
@@ -1163,16 +1245,25 @@ export const TeacherQCMSection: React.FC<TeacherQCMSectionProps> = ({
                   <div className="flex items-center justify-end gap-2 pt-2">
                     <button
                       type="button"
+                      disabled={isAddingQuestion}
                       onClick={() => setShowAddQuestionForm(false)}
-                      className="px-3 py-1.5 bg-white text-slate-600 border border-slate-300 rounded-xl text-xs"
+                      className="px-3 py-1.5 bg-white text-slate-600 border border-slate-300 rounded-xl text-xs disabled:opacity-50"
                     >
                       Annuler
                     </button>
                     <button
                       type="submit"
-                      className="px-4 py-1.5 bg-indigo-600 text-white rounded-xl text-xs font-bold hover:bg-indigo-700"
+                      disabled={isAddingQuestion}
+                      className="px-4 py-1.5 bg-indigo-600 disabled:opacity-60 text-white rounded-xl text-xs font-bold hover:bg-indigo-700 flex items-center gap-1.5"
                     >
-                      Ajouter cette question
+                      {isAddingQuestion ? (
+                        <>
+                          <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                          <span>Ajout en cours...</span>
+                        </>
+                      ) : (
+                        <span>Ajouter cette question</span>
+                      )}
                     </button>
                   </div>
                 </form>
@@ -1963,20 +2054,75 @@ export const TeacherQCMSection: React.FC<TeacherQCMSectionProps> = ({
               </div>
 
               {!editingQcm && (
-                <div className="pt-2 border-t border-slate-100">
-                  <label className="block font-semibold text-slate-700 mb-1">
-                    Questions initiales (optionnel - copier-coller au format tube) :
-                  </label>
+                <div className="pt-2 border-t border-slate-100 space-y-2">
+                  <div className="flex items-center justify-between flex-wrap gap-2">
+                    <label className="block font-semibold text-slate-700">
+                      Questions initiales (optionnel) :
+                    </label>
+                    <div className="flex items-center gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => setFormInitialQuestions(SAMPLE_QCM_IMPORT)}
+                        className="text-[10px] text-indigo-600 hover:text-indigo-800 font-bold bg-indigo-50 hover:bg-indigo-100 px-2.5 py-1 rounded-lg border border-indigo-200 cursor-pointer transition-colors"
+                      >
+                        Insérer un exemple
+                      </button>
+                      {formInitialQuestions.trim() && (
+                        <button
+                          type="button"
+                          onClick={() => setFormInitialQuestions('')}
+                          className="text-[10px] text-slate-500 hover:text-slate-800 px-2 py-1 rounded-lg border border-slate-200 cursor-pointer"
+                        >
+                          Effacer
+                        </button>
+                      )}
+                    </div>
+                  </div>
+
+                  <p className="text-[10px] text-slate-500">
+                    Formats acceptés : séparateur tube <code className="bg-slate-200 px-1 py-0.5 rounded font-mono text-[9px]">|</code>, copié-collé direct Excel/Google Sheets, CSV point-virgule <code className="bg-slate-200 px-1 py-0.5 rounded font-mono text-[9px]">;</code> ou blocs <code className="bg-slate-200 px-1 py-0.5 rounded font-mono text-[9px]">A) ... B) ...</code>
+                  </p>
+
                   <textarea
                     rows={4}
                     value={formInitialQuestions}
                     onChange={e => setFormInitialQuestions(e.target.value)}
-                    placeholder={`Question? | Réponse A | Réponse B | Réponse C | Réponse D | Bonne réponse | Points`}
+                    placeholder={`Exemple :\nQuel raccourci clavier permet de sauvegarder ? | Ctrl + C | Ctrl + S | Ctrl + V | Ctrl + P | B | 2\nLe processeur est le cerveau du PC. | Vrai | Faux | A | 1`}
                     className="w-full p-2.5 bg-slate-50 border border-slate-300 rounded-xl text-xs font-mono focus:ring-2 focus:ring-indigo-500"
                   ></textarea>
-                  <p className="text-[10px] text-slate-400 mt-1">
-                    Vous pourrez également importer ou ajouter des questions à tout moment par la suite.
+
+                  {/* Live parse feedback */}
+                  {initialParseResult && formInitialQuestions.trim() && (
+                    <div className="space-y-1.5 pt-1">
+                      {initialParseResult.validCount > 0 && (
+                        <div className="p-2 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-800 text-[11px] font-semibold flex items-center gap-2">
+                          <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                          <span>
+                            {initialParseResult.validCount} question{initialParseResult.validCount > 1 ? 's' : ''} valide{initialParseResult.validCount > 1 ? 's' : ''} détectée{initialParseResult.validCount > 1 ? 's' : ''} ({initialParseResult.totalPoints} pts au total)
+                          </span>
+                        </div>
+                      )}
+                      {initialParseResult.invalidCount > 0 && (
+                        <div className="p-2 rounded-xl bg-amber-50 border border-amber-200 text-amber-800 text-[11px] flex items-center gap-2">
+                          <AlertCircle className="w-4 h-4 text-amber-600 shrink-0" />
+                          <span>
+                            {initialParseResult.invalidCount} ligne{initialParseResult.invalidCount > 1 ? 's' : ''} incomplète{initialParseResult.invalidCount > 1 ? 's' : ''} (vérifiez que la question et les options A et B sont présentes).
+                          </span>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  <p className="text-[10px] text-slate-400">
+                    Vous pourrez également importer ou modifier des questions à tout moment via le bouton « Gérer les questions ».
                   </p>
+                </div>
+              )}
+
+              {modalError && (
+                <div className="p-3.5 bg-rose-50 border border-rose-200 text-rose-800 rounded-xl text-xs flex items-center gap-2.5 font-medium animate-in fade-in">
+                  <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
+                  <span className="flex-1">{modalError}</span>
                 </div>
               )}
 
@@ -1984,15 +2130,24 @@ export const TeacherQCMSection: React.FC<TeacherQCMSectionProps> = ({
                 <button
                   type="button"
                   onClick={() => setShowCreateModal(false)}
-                  className="px-4 py-2 bg-white text-slate-700 border border-slate-300 rounded-xl text-xs font-semibold hover:bg-slate-50 cursor-pointer"
+                  disabled={isSavingQcm}
+                  className="px-4 py-2 bg-white text-slate-700 border border-slate-300 rounded-xl text-xs font-semibold hover:bg-slate-50 cursor-pointer disabled:opacity-50"
                 >
                   Annuler
                 </button>
                 <button
                   type="submit"
-                  className="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold shadow-md shadow-indigo-500/20 cursor-pointer"
+                  disabled={isSavingQcm}
+                  className="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-60 text-white rounded-xl text-xs font-bold shadow-md shadow-indigo-500/20 cursor-pointer flex items-center gap-2 transition-all"
                 >
-                  {editingQcm ? 'Enregistrer les modifications' : 'Créer le QCM'}
+                  {isSavingQcm ? (
+                    <>
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                      <span>{editingQcm ? 'Enregistrement...' : 'Création en cours...'}</span>
+                    </>
+                  ) : (
+                    <span>{editingQcm ? 'Enregistrer les modifications' : 'Créer le QCM'}</span>
+                  )}
                 </button>
               </div>
             </form>

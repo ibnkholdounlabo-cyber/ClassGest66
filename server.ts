@@ -897,6 +897,29 @@ async function startServer() {
     }
   });
 
+  // Create QCM fallback endpoint (Teacher only)
+  app.post('/api/teacher/qcms', requireTeacher, (req, res) => {
+    const { title, description, category, durationMinutes, totalPoints, isActive, classIds, classId } = req.body;
+    if (!title) {
+      return res.status(400).json({ error: 'Le titre du QCM est obligatoire' });
+    }
+    const targetClassId = classId || (Array.isArray(classIds) && classIds[0]) || 'default';
+    try {
+      const qcm = db.createQCM(targetClassId, {
+        title,
+        description,
+        category,
+        durationMinutes: durationMinutes !== undefined ? Number(durationMinutes) : 0,
+        totalPoints: totalPoints !== undefined ? Number(totalPoints) : 20,
+        isActive: isActive !== undefined ? Boolean(isActive) : true,
+        classIds: Array.isArray(classIds) ? classIds : undefined
+      });
+      res.status(201).json(qcm);
+    } catch (err: any) {
+      res.status(400).json({ error: err.message });
+    }
+  });
+
   // Update QCM (Teacher only)
   app.put('/api/teacher/qcms/:id', requireTeacher, (req, res) => {
     try {

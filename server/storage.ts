@@ -1991,9 +1991,16 @@ for m in matieres:
 
     const targetClassIds = (data.classIds && data.classIds.length > 0)
       ? Array.from(new Set(data.classIds.filter(Boolean)))
-      : [classId];
+      : (classId ? [classId] : []);
 
-    const primaryClassId = targetClassIds[0] || classId;
+    let primaryClassId = targetClassIds[0] || classId;
+    if (!primaryClassId) {
+      const firstClass = this.db.prepare('SELECT id FROM classes LIMIT 1').get() as { id: string } | undefined;
+      primaryClassId = firstClass?.id || 'all';
+      if (targetClassIds.length === 0) {
+        targetClassIds.push(primaryClassId);
+      }
+    }
 
     this.db.prepare(`
       INSERT INTO qcms (id, classId, title, description, category, durationMinutes, totalPoints, isActive, createdAt)

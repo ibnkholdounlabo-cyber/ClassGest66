@@ -582,15 +582,20 @@ export const api = {
       classIds?: string[];
     }
   ): Promise<QCM> {
+    const validClassId = classId || qcmData.classIds?.[0];
+    const url = validClassId
+      ? `${API_BASE}/teacher/classes/${encodeURIComponent(validClassId)}/qcms`
+      : `${API_BASE}/teacher/qcms`;
+
     return safeFetchJson<QCM>(
-      `${API_BASE}/teacher/classes/${classId}/qcms`,
+      url,
       {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           Authorization: `Bearer ${token}`
         },
-        body: JSON.stringify(qcmData)
+        body: JSON.stringify({ ...qcmData, classId: validClassId })
       },
       'Erreur lors de la création du QCM'
     );

@@ -1365,8 +1365,8 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
           {selectedRubrique === 'qcms' && (
             <div className="p-6">
               <TeacherQCMSection
-                classId={selectedClass.id}
-                className={selectedClass.name}
+                classId={selectedClass?.id || (classes[0]?.id ?? '')}
+                className={selectedClass?.name || (classes[0]?.name ?? 'Classe')}
                 token={session!.token}
                 classes={classes}
               />
