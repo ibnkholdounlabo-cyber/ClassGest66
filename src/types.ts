@@ -298,6 +298,9 @@ export interface StudentAttendanceSummary {
 
 export interface ClassDisciplineStats {
   totalSessions: number;
+  totalAbsences?: number;
+  totalLate?: number;
+  totalExcused?: number;
   totalNoNotebook: number;
   totalExcluded: number;
   totalUnprepared: number;
@@ -305,6 +308,43 @@ export interface ClassDisciplineStats {
   totalMissingMaterial: number;
   totalPositive: number;
   averageScore: number;
+  globalCounts?: {
+    absence_cahier: number;
+    exclu: number;
+    oubli_materiel: number;
+    travail_non_fait: number;
+    bavardage: number;
+    participation: number;
+    travail_serieux: number;
+    absences?: number;
+    retards?: number;
+    excuses?: number;
+  };
+  studentSummaries?: Array<{
+    id: string;
+    studentId: string;
+    firstName: string;
+    lastName: string;
+    studentNumber: string;
+    isRepeating: boolean;
+    totalScore: number;
+    absentCount: number;
+    excusedCount: number;
+    lateCount: number;
+    presentCount: number;
+    totalAbsences: number;
+    attendanceRate: number;
+    optionCounts: {
+      absence_cahier: number;
+      exclu: number;
+      oubli_materiel: number;
+      travail_non_fait: number;
+      bavardage: number;
+      participation: number;
+      travail_serieux: number;
+    };
+    lastNotes?: string;
+  }>;
   studentStats: Array<{
     studentId: string;
     firstName: string;
@@ -312,6 +352,12 @@ export interface ClassDisciplineStats {
     studentNumber: string;
     isRepeating: boolean;
     cumulativeScore: number;
+    absentCount?: number;
+    excusedCount?: number;
+    lateCount?: number;
+    presentCount?: number;
+    totalAbsences?: number;
+    attendanceRate?: number;
     noNotebookCount: number;
     excludedCount: number;
     unpreparedCount: number;

@@ -8,7 +8,8 @@ async function startServer() {
   const app = express();
   const PORT = 3000;
   const TOKEN_SECRET = 'intranet_school_secure_token_secret_key_2024';
-  const SESSION_DURATION_MS = 30 * 60 * 1000; // Limite stricte de durée de session : 30 minutes
+  const STUDENT_SESSION_DURATION_MS = 30 * 60 * 1000; // Limite de 30 minutes pour les élèves
+  const TEACHER_SESSION_DURATION_MS = 4 * 60 * 60 * 1000; // Durée de session professeur : 4 heures (240 minutes)
 
   app.use(express.json({ limit: '50mb' }));
   app.use(express.urlencoded({ extended: true, limit: '50mb' }));
@@ -26,7 +27,8 @@ async function startServer() {
 
   function createToken(role: 'teacher' | 'student', id: string, name: string): { token: string; expiresAt: number; expiresIn: number } {
     const now = Date.now();
-    const expiresAt = now + SESSION_DURATION_MS;
+    const duration = role === 'teacher' ? TEACHER_SESSION_DURATION_MS : STUDENT_SESSION_DURATION_MS;
+    const expiresAt = now + duration;
     const payload = Buffer.from(JSON.stringify({ role, id, name, t: now, exp: expiresAt })).toString('base64url');
     const signature = crypto.createHmac('sha256', TOKEN_SECRET).update(payload).digest('base64url');
     const token = `tok_${role}_${payload}_${signature}`;
@@ -34,7 +36,7 @@ async function startServer() {
     return {
       token,
       expiresAt,
-      expiresIn: Math.floor(SESSION_DURATION_MS / 1000)
+      expiresIn: Math.floor(duration / 1000)
     };
   }
 
@@ -62,8 +64,9 @@ async function startServer() {
           try {
             const data = JSON.parse(Buffer.from(payload, 'base64url').toString('utf-8'));
             const createdAt = typeof data.t === 'number' ? data.t : now;
-            const expiresAt = typeof data.exp === 'number' ? data.exp : (createdAt + SESSION_DURATION_MS);
-            // Vérification de la limite de 30 minutes
+            const defaultDuration = role === 'teacher' ? TEACHER_SESSION_DURATION_MS : STUDENT_SESSION_DURATION_MS;
+            const expiresAt = typeof data.exp === 'number' ? data.exp : (createdAt + defaultDuration);
+            // Vérification de l'expiration de la session (4h prof, 30m élève)
             if (now > expiresAt) {
               return null; // Session expirée
             }

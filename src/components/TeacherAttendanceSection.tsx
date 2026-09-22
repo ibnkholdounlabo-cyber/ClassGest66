@@ -33,7 +33,12 @@ import {
   ThumbsUp,
   SlidersHorizontal,
   Paperclip,
-  Download
+  Download,
+  Maximize2,
+  Minimize2,
+  RefreshCw,
+  Radio,
+  Eye
 } from 'lucide-react';
 import { api } from '../api';
 import {
@@ -182,7 +187,12 @@ export const TeacherAttendanceSection: React.FC<TeacherAttendanceSectionProps> =
   const [disciplineData, setDisciplineData] = useState<any | null>(null);
   const [loadingDiscipline, setLoadingDiscipline] = useState(false);
   const [disciplineSearch, setDisciplineSearch] = useState('');
-  const [disciplineSort, setDisciplineSort] = useState<'score-asc' | 'score-desc' | 'name-asc' | 'exclu-desc' | 'cahier-desc'>('score-asc');
+  const [disciplineSort, setDisciplineSort] = useState<'score-asc' | 'score-desc' | 'name-asc' | 'exclu-desc' | 'cahier-desc' | 'absent-desc' | 'late-desc'>('score-asc');
+
+  // Full-width table expansion & Live presence synchronization
+  const [isTableExpanded, setIsTableExpanded] = useState(false);
+  const [isLiveSyncing, setIsLiveSyncing] = useState(false);
+  const [lastLiveSync, setLastLiveSync] = useState<string>('');
 
   // Load sessions on mount or when class changes
   useEffect(() => {
@@ -203,6 +213,51 @@ export const TeacherAttendanceSection: React.FC<TeacherAttendanceSectionProps> =
       loadDiscipline();
     }
   }, [activeTab]);
+
+  // Synchronisation en direct des pointages élèves (toutes les 5 secondes)
+  const refreshLiveSessionSilently = async (sessionId: string) => {
+    setIsLiveSyncing(true);
+    try {
+      const data = await api.teacherGetAttendanceSessionDetails(token, sessionId);
+      if (!data) return;
+      setCurrentSession(data);
+      setRecordEdits((prev) => {
+        let changed = false;
+        const updated = { ...prev };
+        data.records.forEach((rec) => {
+          if (rec.markedByStudentAt) {
+            const currentEdit = updated[rec.studentId];
+            if (!currentEdit || currentEdit.status !== 'present') {
+              changed = true;
+              updated[rec.studentId] = {
+                status: 'present',
+                notes: currentEdit?.notes || rec.notes || '',
+                options: currentEdit?.options || [],
+                score: currentEdit?.score ?? rec.score ?? 0
+              };
+            }
+          }
+        });
+        return changed ? updated : prev;
+      });
+      setLastLiveSync(new Date().toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
+    } catch {
+      // silent
+    } finally {
+      setIsLiveSyncing(false);
+    }
+  };
+
+  // Background polling for student online check-in
+  useEffect(() => {
+    if (activeTab !== 'sessions' || !selectedSessionId) return;
+
+    const interval = setInterval(() => {
+      refreshLiveSessionSilently(selectedSessionId);
+    }, 5000);
+
+    return () => clearInterval(interval);
+  }, [activeTab, selectedSessionId, token]);
 
   const loadSessions = async () => {
     setLoadingSessions(true);
@@ -247,6 +302,7 @@ export const TeacherAttendanceSection: React.FC<TeacherAttendanceSectionProps> =
         };
       });
       setRecordEdits(map);
+      setLastLiveSync(new Date().toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
     } catch (err: any) {
       console.error('Error loading session details:', err);
     } finally {
@@ -321,9 +377,8 @@ export const TeacherAttendanceSection: React.FC<TeacherAttendanceSectionProps> =
       setSaveSuccessMessage('Feuille d’appel, options disciplinaires et scores enregistrés avec succès !');
       setTimeout(() => setSaveSuccessMessage(''), 4000);
       loadSessions(); // refresh counts
-      if (activeTab === 'discipline') {
-        loadDiscipline();
-      }
+      loadDiscipline(); // refresh discipline stats unconditionally
+      loadSummary(); // refresh attendance summary unconditionally
     } catch (err: any) {
       alert(err.message || 'Erreur lors de l’enregistrement de l’appel');
     } finally {
@@ -522,6 +577,13 @@ export const TeacherAttendanceSection: React.FC<TeacherAttendanceSectionProps> =
       .sort((a: any, b: any) => {
         if (disciplineSort === 'score-asc') return a.totalScore - b.totalScore;
         if (disciplineSort === 'score-desc') return b.totalScore - a.totalScore;
+        if (disciplineSort === 'absent-desc') {
+          const totalA = (a.absentCount || 0) + (a.excusedCount || 0);
+          const totalB = (b.absentCount || 0) + (b.excusedCount || 0);
+          if (totalB !== totalA) return totalB - totalA;
+          return (b.lateCount || 0) - (a.lateCount || 0);
+        }
+        if (disciplineSort === 'late-desc') return (b.lateCount || 0) - (a.lateCount || 0);
         if (disciplineSort === 'exclu-desc') return (b.optionCounts?.exclu || 0) - (a.optionCounts?.exclu || 0);
         if (disciplineSort === 'cahier-desc') return (b.optionCounts?.absence_cahier || 0) - (a.optionCounts?.absence_cahier || 0);
         if (disciplineSort === 'name-asc') return `${a.lastName} ${a.firstName}`.localeCompare(`${b.lastName} ${b.firstName}`, 'fr');
@@ -593,8 +655,8 @@ export const TeacherAttendanceSection: React.FC<TeacherAttendanceSectionProps> =
       {/* TAB 1: SESSIONS & ROLL CALL */}
       {activeTab === 'sessions' && (
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-          {/* Left Column: List of Sessions */}
-          <div className="lg:col-span-4 space-y-3">
+          {/* Left Column: List of Sessions (hidden when table is expanded to full screen) */}
+          <div className={`space-y-3 ${isTableExpanded ? 'hidden' : 'lg:col-span-4'}`}>
             <div className="flex items-center justify-between">
               <h3 className="font-bold text-xs uppercase tracking-wider text-slate-700">
                 Séances de cours ({filteredSessions.length})
@@ -737,7 +799,7 @@ export const TeacherAttendanceSection: React.FC<TeacherAttendanceSectionProps> =
           </div>
 
           {/* Right Column: Roll Call Sheet for Selected Session */}
-          <div className="lg:col-span-8">
+          <div className={isTableExpanded ? 'lg:col-span-12' : 'lg:col-span-8'}>
             {loadingDetails ? (
               <div className="bg-white rounded-2xl border border-slate-200 p-12 text-center text-slate-400 text-xs">
                 <span className="inline-block w-5 h-5 border-2 border-indigo-600 border-t-transparent rounded-full animate-spin mb-2"></span>
@@ -754,9 +816,9 @@ export const TeacherAttendanceSection: React.FC<TeacherAttendanceSectionProps> =
             ) : (
               <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
                 {/* Header of Active Session */}
-                <div className="bg-slate-50/80 p-4 border-b border-slate-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div className="bg-slate-50/80 p-4 border-b border-slate-200 flex flex-col md:flex-row md:items-center justify-between gap-3">
                   <div>
-                    <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-2 flex-wrap">
                       <h3 className="font-extrabold text-sm sm:text-base text-slate-900">
                         {currentSession.title}
                       </h3>
@@ -768,6 +830,26 @@ export const TeacherAttendanceSection: React.FC<TeacherAttendanceSectionProps> =
                           year: 'numeric'
                         })}
                       </span>
+
+                      {/* Quick Session Switcher when table is expanded */}
+                      {isTableExpanded && sessions.length > 1 && (
+                        <select
+                          value={selectedSessionId || ''}
+                          onChange={(e) => {
+                            if (e.target.value) {
+                              setSelectedSessionId(e.target.value);
+                              loadSessionDetails(e.target.value);
+                            }
+                          }}
+                          className="text-xs h-7 px-2 bg-white border border-slate-300 rounded-lg text-slate-700 font-medium cursor-pointer"
+                        >
+                          {sessions.map((s) => (
+                            <option key={s.id} value={s.id}>
+                              {s.title} ({new Date(s.date).toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit' })})
+                            </option>
+                          ))}
+                        </select>
+                      )}
                     </div>
                     {currentSession.startTime && (
                       <p className="text-xs text-slate-500 mt-0.5 flex items-center gap-1.5">
@@ -778,7 +860,39 @@ export const TeacherAttendanceSection: React.FC<TeacherAttendanceSectionProps> =
                   </div>
 
                   {/* Actions & Save */}
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    {/* Live Presence Sync status */}
+                    <div
+                      className="flex items-center gap-1.5 px-2.5 py-1 rounded-xl bg-emerald-50 text-emerald-800 border border-emerald-200 text-[11px] font-medium"
+                      title="Synchronisation automatique des pointages élèves en direct (toutes les 5 secondes)"
+                    >
+                      <Radio className={`w-3.5 h-3.5 text-emerald-600 ${isLiveSyncing ? 'animate-pulse' : ''}`} />
+                      <span>Synchro direct {lastLiveSync ? `(${lastLiveSync})` : ''}</span>
+                      <button
+                        type="button"
+                        onClick={() => selectedSessionId && refreshLiveSessionSilently(selectedSessionId)}
+                        className="p-0.5 hover:text-emerald-950 rounded cursor-pointer ml-0.5"
+                        title="Actualiser les pointages élèves"
+                      >
+                        <RefreshCw className={`w-3 h-3 ${isLiveSyncing ? 'animate-spin' : ''}`} />
+                      </button>
+                    </div>
+
+                    {/* Table expansion toggle: Adapt to screen */}
+                    <button
+                      type="button"
+                      onClick={() => setIsTableExpanded(!isTableExpanded)}
+                      className={`inline-flex items-center gap-1 px-3 py-1.5 rounded-xl border text-xs font-semibold transition-all cursor-pointer ${
+                        isTableExpanded
+                          ? 'bg-indigo-50 border-indigo-200 text-indigo-700 hover:bg-indigo-100'
+                          : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-100'
+                      }`}
+                      title={isTableExpanded ? 'Revenir à la vue standard avec liste des séances' : "Étendre le tableau à tout l'écran"}
+                    >
+                      {isTableExpanded ? <Minimize2 className="w-3.5 h-3.5" /> : <Maximize2 className="w-3.5 h-3.5" />}
+                      <span>{isTableExpanded ? 'Réduire' : "Adapter à l'écran"}</span>
+                    </button>
+
                     <button
                       type="button"
                       onClick={() => window.print()}
@@ -880,17 +994,17 @@ export const TeacherAttendanceSection: React.FC<TeacherAttendanceSectionProps> =
                       <p className="font-semibold">Aucun élève ne correspond aux critères de filtre</p>
                     </div>
                   ) : (
-                    <table className="w-full text-left border-collapse text-xs min-w-[1020px]">
+                    <table className="w-full text-left border-collapse text-xs min-w-[850px] lg:min-w-full">
                       <thead className="bg-slate-50/95 sticky top-0 z-10 border-b border-slate-200 text-slate-600 font-bold uppercase tracking-wider text-[11px] select-none backdrop-blur-xs">
                         <tr>
-                          <th className="py-3 px-2.5 text-center w-10">N°</th>
-                          <th className="py-3 px-3 min-w-[180px]">Nom & Prénom</th>
-                          <th className="py-3 px-3 text-center min-w-[260px]">Présence / Absence</th>
-                          <th className="py-3 px-2 text-center w-28" title="Absence de cahier (-1 pt)">Cahier</th>
-                          <th className="py-3 px-2 text-center w-24" title="Élève exclu de cours (-3 pts)">Exclu</th>
-                          <th className="py-3 px-2 min-w-[170px]">Autres sanctions / Bonus</th>
-                          <th className="py-3 px-2 text-center w-24">Score</th>
-                          <th className="py-3 px-3 min-w-[180px]">Observations</th>
+                          <th className="py-2.5 px-2 text-center w-8">N°</th>
+                          <th className="py-2.5 px-3 min-w-[150px]">Nom & Prénom</th>
+                          <th className="py-2.5 px-2 text-center min-w-[210px]">Présence / Absence</th>
+                          <th className="py-2.5 px-2 text-center w-24" title="Absence de cahier (-1 pt)">Cahier</th>
+                          <th className="py-2.5 px-2 text-center w-20" title="Élève exclu de cours (-3 pts)">Exclu</th>
+                          <th className="py-2.5 px-2 min-w-[150px]">Discipline / Bonus</th>
+                          <th className="py-2.5 px-2 text-center w-20">Score</th>
+                          <th className="py-2.5 px-2 min-w-[130px]">Observations</th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-100 bg-white">
@@ -1208,12 +1322,12 @@ export const TeacherAttendanceSection: React.FC<TeacherAttendanceSectionProps> =
                 <span>Statistiques & Bilan Disciplinaire de la Classe</span>
               </h3>
               <p className="text-xs text-slate-500 mt-0.5">
-                Suivi des sanctions (absences de cahiers, exclusions, oublis de matériel) et valorisation du travail sérieux
+                Suivi des absences, sanctions (absences de cahiers, exclusions, oublis de matériel) et valorisation du travail sérieux
               </p>
             </div>
 
-            {/* Filter & Sort */}
-            <div className="flex items-center gap-2">
+            {/* Filter & Sort & Print */}
+            <div className="flex flex-wrap items-center gap-2">
               <div className="relative">
                 <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-2.5" />
                 <input
@@ -1232,16 +1346,40 @@ export const TeacherAttendanceSection: React.FC<TeacherAttendanceSectionProps> =
               >
                 <option value="score-asc">Score croissant (sanctions d'abord)</option>
                 <option value="score-desc">Score décroissant (bonus d'abord)</option>
+                <option value="absent-desc">Nombre d'absences (décroissant)</option>
+                <option value="late-desc">Nombre de retards (décroissant)</option>
                 <option value="exclu-desc">Nombre d'exclusions</option>
                 <option value="cahier-desc">Absences de cahier</option>
                 <option value="name-asc">Nom (A-Z)</option>
               </select>
+
+              <button
+                type="button"
+                onClick={() => window.print()}
+                className="inline-flex items-center gap-1.5 h-8 px-3 rounded-xl bg-white hover:bg-slate-100 border border-slate-200 text-slate-700 text-xs font-semibold shadow-xs transition-colors cursor-pointer"
+                title="Imprimer ou exporter en PDF le bilan disciplinaire"
+              >
+                <Printer className="w-3.5 h-3.5 text-slate-500" />
+                <span>Exporter en PDF</span>
+              </button>
             </div>
           </div>
 
           {/* Global Discipline Cards */}
           {disciplineData && (
-            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
+            <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-3">
+              <div className="p-3.5 rounded-xl bg-purple-50 border border-purple-200">
+                <span className="text-[10px] font-bold uppercase text-purple-800 block">Absences</span>
+                <span className="text-2xl font-black text-purple-900">
+                  {disciplineData.globalCounts?.absences ?? disciplineData.totalAbsences ?? 0}
+                </span>
+                <span className="text-[10px] text-purple-600 block mt-0.5">
+                  {(disciplineData.globalCounts?.retards ?? disciplineData.totalLate ?? 0) > 0
+                    ? `+ ${disciplineData.globalCounts?.retards ?? disciplineData.totalLate} retard(s)`
+                    : 'séances manquées'}
+                </span>
+              </div>
+
               <div className="p-3.5 rounded-xl bg-rose-50 border border-rose-200">
                 <span className="text-[10px] font-bold uppercase text-rose-800 block">Sans Cahier</span>
                 <span className="text-2xl font-black text-rose-900">
@@ -1303,12 +1441,15 @@ export const TeacherAttendanceSection: React.FC<TeacherAttendanceSectionProps> =
               Aucune donnée de comportement trouvée. Effectuez l’appel et cochez des options pour visualiser les statistiques.
             </div>
           ) : (
-            <div className="overflow-x-auto border border-slate-200 rounded-xl">
+            <div className="print-area overflow-x-auto border border-slate-200 rounded-xl">
               <table className="w-full text-left text-xs">
                 <thead className="bg-slate-50 text-slate-600 uppercase tracking-wider text-[10px] border-b border-slate-200">
                   <tr>
                     <th className="py-2.5 px-3">Élève</th>
                     <th className="py-2.5 px-2 text-center">Profil</th>
+                    <th className="py-2.5 px-2 text-center text-purple-700 bg-purple-50/70 border-x border-purple-100">
+                      Absences
+                    </th>
                     <th className="py-2.5 px-2 text-center text-rose-700">Sans Cahier</th>
                     <th className="py-2.5 px-2 text-center text-red-700">Exclu</th>
                     <th className="py-2.5 px-2 text-center text-amber-700">Sans Matériel</th>
@@ -1323,6 +1464,10 @@ export const TeacherAttendanceSection: React.FC<TeacherAttendanceSectionProps> =
                   {filteredDisciplineStudents.map((std: any) => {
                     const counts = std.optionCounts || {};
                     const score = std.totalScore || 0;
+                    const totalStudentAbsences = (std.absentCount ?? 0) + (std.excusedCount ?? 0);
+                    const lateCount = std.lateCount ?? 0;
+                    const excusedCount = std.excusedCount ?? 0;
+
                     return (
                       <tr key={std.id} className="hover:bg-slate-50">
                         <td className="py-2.5 px-3 font-bold text-slate-900">
@@ -1340,6 +1485,32 @@ export const TeacherAttendanceSection: React.FC<TeacherAttendanceSectionProps> =
                             <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-emerald-100 text-emerald-800">
                               Nouveau
                             </span>
+                          )}
+                        </td>
+                        <td className="py-2.5 px-2 text-center border-x border-purple-100/60 bg-purple-50/20">
+                          {totalStudentAbsences > 0 ? (
+                            <div className="inline-flex flex-col items-center">
+                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-black bg-purple-100 text-purple-800 border border-purple-200">
+                                <span>{totalStudentAbsences}</span>
+                                <span className="text-[10px] font-medium">abs.</span>
+                              </span>
+                              {excusedCount > 0 && (
+                                <span className="text-[9px] text-purple-600 font-medium">
+                                  dont {excusedCount} just.
+                                </span>
+                              )}
+                              {lateCount > 0 && (
+                                <span className="text-[9px] text-amber-600 font-medium">
+                                  {lateCount} ret.
+                                </span>
+                              )}
+                            </div>
+                          ) : lateCount > 0 ? (
+                            <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-amber-50 text-amber-700 border border-amber-200">
+                              {lateCount} ret.
+                            </span>
+                          ) : (
+                            <span className="text-slate-400 font-normal">0</span>
                           )}
                         </td>
                         <td className="py-2.5 px-2 text-center font-bold text-rose-700">

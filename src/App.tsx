@@ -7,7 +7,8 @@ import { TeacherDashboard } from './components/TeacherDashboard';
 import { Student, TeacherUser, ClassGroup, AuthStudentSession, AuthTeacherSession } from './types';
 import { School, AlertTriangle, X } from 'lucide-react';
 
-const SESSION_DURATION_MS = 30 * 60 * 1000; // Limite stricte de 30 minutes par session
+const STUDENT_SESSION_DURATION_MS = 30 * 60 * 1000; // Limite stricte de 30 minutes pour les élèves
+const TEACHER_SESSION_DURATION_MS = 4 * 60 * 60 * 1000; // Durée de session professeur : 4 heures (240 minutes)
 
 export default function App() {
   // Current URL path tracking (e.g. '/' or '/prof')
@@ -18,7 +19,7 @@ export default function App() {
     return '/';
   });
 
-  // Message d'alerte lors de l'expiration d'une session de 30 min
+  // Message d'alerte lors de l'expiration d'une session
   const [expiredNotice, setExpiredNotice] = useState<string | null>(null);
 
   // Student session avec vérification d'expiration au démarrage
@@ -28,7 +29,7 @@ export default function App() {
       if (!saved) return null;
       const parsed = JSON.parse(saved);
       const now = Date.now();
-      const expiresAt = parsed.expiresAt || (parsed.loginTime ? parsed.loginTime + SESSION_DURATION_MS : null);
+      const expiresAt = parsed.expiresAt || (parsed.loginTime ? parsed.loginTime + STUDENT_SESSION_DURATION_MS : null);
       if (expiresAt && now > expiresAt) {
         localStorage.removeItem('intranet_student_session');
         return null;
@@ -39,14 +40,14 @@ export default function App() {
     }
   });
 
-  // Teacher session avec vérification d'expiration au démarrage
+  // Teacher session avec vérification d'expiration au démarrage (4 heures)
   const [teacherSession, setTeacherSession] = useState<AuthTeacherSession | null>(() => {
     try {
       const saved = localStorage.getItem('intranet_teacher_session');
       if (!saved) return null;
       const parsed = JSON.parse(saved);
       const now = Date.now();
-      const expiresAt = parsed.expiresAt || (parsed.loginTime ? parsed.loginTime + SESSION_DURATION_MS : null);
+      const expiresAt = parsed.expiresAt || (parsed.loginTime ? parsed.loginTime + TEACHER_SESSION_DURATION_MS : null);
       if (expiresAt && now > expiresAt) {
         localStorage.removeItem('intranet_teacher_session');
         return null;
@@ -99,14 +100,14 @@ export default function App() {
     navigate('/prof');
   }, []);
 
-  // Déconnexion automatique après 30 minutes
+  // Déconnexion automatique après expiration (30 min pour élève, 4 heures pour enseignant)
   useEffect(() => {
     const checkExpiration = () => {
       const now = Date.now();
       if (studentSession?.expiresAt && now >= studentSession.expiresAt) {
         handleStudentLogout('Votre session élève de 30 minutes a expiré. Pour des raisons de sécurité, veuillez vous reconnecter.');
       } else if (teacherSession?.expiresAt && now >= teacherSession.expiresAt) {
-        handleTeacherLogout('Votre session professeur de 30 minutes a expiré. Pour des raisons de sécurité, veuillez vous reconnecter.');
+        handleTeacherLogout('Votre session professeur de 4 heures est arrivée à échéance. Veuillez vous reconnecter.');
       }
     };
 
@@ -119,7 +120,7 @@ export default function App() {
   useEffect(() => {
     const handleSessionExpiredEvent = (e: Event) => {
       const customEvent = e as CustomEvent<{ message?: string }>;
-      const msg = customEvent.detail?.message || 'Votre session de 30 minutes est arrivée à échéance. Veuillez vous reconnecter.';
+      const msg = customEvent.detail?.message || 'Votre session est arrivée à échéance. Veuillez vous reconnecter.';
       if (studentSession) {
         handleStudentLogout(msg);
       } else if (teacherSession) {
@@ -145,7 +146,7 @@ export default function App() {
     const sessionWithTiming: AuthStudentSession = {
       ...session,
       loginTime: session.loginTime || now,
-      expiresAt: session.expiresAt || (now + SESSION_DURATION_MS),
+      expiresAt: session.expiresAt || (now + STUDENT_SESSION_DURATION_MS),
       durationMinutes: 30
     };
     setStudentSession(sessionWithTiming);
@@ -170,8 +171,8 @@ export default function App() {
     const sessionWithTiming: AuthTeacherSession = {
       ...session,
       loginTime: session.loginTime || now,
-      expiresAt: session.expiresAt || (now + SESSION_DURATION_MS),
-      durationMinutes: 30
+      expiresAt: session.expiresAt || (now + TEACHER_SESSION_DURATION_MS),
+      durationMinutes: 240
     };
     setTeacherSession(sessionWithTiming);
     setStudentSession(null);

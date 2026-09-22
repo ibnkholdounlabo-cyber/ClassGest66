@@ -1372,9 +1372,10 @@ export const TeacherQCMSection: React.FC<TeacherQCMSectionProps> = ({
                   type="button"
                   onClick={() => window.print()}
                   className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded-xl text-xs font-semibold inline-flex items-center gap-1.5 cursor-pointer no-print"
+                  title="Générer une version imprimable et exporter en PDF"
                 >
                   <Printer className="w-3.5 h-3.5" />
-                  <span>Imprimer</span>
+                  <span>Exporter en PDF</span>
                 </button>
                 <button
                   type="button"

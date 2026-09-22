@@ -44,8 +44,12 @@ export const Header: React.FC<HeaderProps> = ({
   }, [sessionExpiresAt]);
 
   const formatSessionTime = (seconds: number) => {
-    const mins = Math.floor(seconds / 60);
+    const hours = Math.floor(seconds / 3600);
+    const mins = Math.floor((seconds % 3600) / 60);
     const secs = seconds % 60;
+    if (hours > 0) {
+      return `${hours}h ${mins.toString().padStart(2, '0')}m ${secs.toString().padStart(2, '0')}s`;
+    }
     return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
   };
 
@@ -81,7 +85,7 @@ export const Header: React.FC<HeaderProps> = ({
             {/* Session Timer Badge when authenticated */}
             {remainingSec !== null && (studentSession || teacherSession) && (
               <div
-                title="Durée de session limitée à 30 minutes pour votre sécurité"
+                title={teacherSession ? "Durée de session professeur : 4 heures" : "Durée de session élève : 30 minutes"}
                 className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-mono transition-colors border ${
                   isWarningTime
                     ? 'bg-amber-950/70 border-amber-600/70 text-amber-300 animate-pulse'

@@ -107,6 +107,7 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
 
   const [showPrintModal, setShowPrintModal] = useState(false);
   const [showManualModal, setShowManualModal] = useState(false);
+  const [triggerExportPdf, setTriggerExportPdf] = useState(false);
 
   // Notifications
   const [copiedId, setCopiedId] = useState<string | null>(null);
@@ -775,15 +776,31 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
               </button>
 
               {students.length > 0 && (
-                <button
-                  id="btn-open-print-modal"
-                  type="button"
-                  onClick={() => setShowPrintModal(true)}
-                  className="inline-flex items-center gap-2 px-3.5 py-2 rounded-xl bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200 text-xs font-semibold transition-colors cursor-pointer"
-                >
-                  <Printer className="w-4 h-4 text-emerald-600" />
-                  <span>Imprimer fiches élèves ({students.length})</span>
-                </button>
+                <>
+                  <button
+                    id="btn-open-print-modal"
+                    type="button"
+                    onClick={() => setShowPrintModal(true)}
+                    className="inline-flex items-center gap-2 px-3.5 py-2 rounded-xl bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200 text-xs font-semibold transition-colors cursor-pointer"
+                  >
+                    <Printer className="w-4 h-4 text-emerald-600" />
+                    <span>Imprimer fiches élèves ({students.length})</span>
+                  </button>
+
+                  <button
+                    id="btn-export-pdf-header"
+                    type="button"
+                    onClick={() => {
+                      setSelectedRubrique('tests');
+                      setTriggerExportPdf(true);
+                    }}
+                    className="inline-flex items-center gap-2 px-3.5 py-2 rounded-xl bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 text-xs font-semibold transition-colors cursor-pointer"
+                    title="Générer une version imprimable et exporter les résultats des élèves en PDF"
+                  >
+                    <Printer className="w-4 h-4 text-indigo-600" />
+                    <span>Exporter en PDF</span>
+                  </button>
+                </>
               )}
 
               <button
@@ -1091,8 +1108,23 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
                   )}
                 </div>
 
-                <div className="text-[11px] text-slate-500 font-medium">
-                  Affichage de <strong className="text-slate-900 font-bold">{filteredStudents.length}</strong> sur <strong>{students.length}</strong> élève{students.length > 1 ? 's' : ''}
+                <div className="flex items-center gap-3">
+                  <div className="text-[11px] text-slate-500 font-medium">
+                    Affichage de <strong className="text-slate-900 font-bold">{filteredStudents.length}</strong> sur <strong>{students.length}</strong> élève{students.length > 1 ? 's' : ''}
+                  </div>
+                  <button
+                    id="btn-export-pdf-students-table"
+                    type="button"
+                    onClick={() => {
+                      setSelectedRubrique('tests');
+                      setTriggerExportPdf(true);
+                    }}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 rounded-xl text-xs font-semibold transition-colors cursor-pointer"
+                    title="Générer une version imprimable et exporter les résultats des élèves en PDF"
+                  >
+                    <Printer className="w-3.5 h-3.5 text-indigo-600" />
+                    <span>Exporter en PDF</span>
+                  </button>
                 </div>
               </div>
 
@@ -1323,6 +1355,8 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
                 className={selectedClass.name}
                 token={session!.token}
                 classes={classes}
+                autoOpenPrint={triggerExportPdf}
+                onClosePrint={() => setTriggerExportPdf(false)}
               />
             </div>
           )}

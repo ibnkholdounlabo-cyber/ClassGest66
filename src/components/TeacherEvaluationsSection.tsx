@@ -28,7 +28,11 @@ import {
   Pencil,
   Sparkles,
   School,
-  Layers
+  Layers,
+  Printer,
+  Download,
+  Award,
+  Check
 } from 'lucide-react';
 import {
   ClassEvaluationsSummary,
@@ -44,13 +48,17 @@ interface TeacherEvaluationsSectionProps {
   className: string;
   token: string;
   classes?: ClassGroup[];
+  autoOpenPrint?: boolean;
+  onClosePrint?: () => void;
 }
 
 export const TeacherEvaluationsSection: React.FC<TeacherEvaluationsSectionProps> = ({
   classId,
   className,
   token,
-  classes = []
+  classes = [],
+  autoOpenPrint = false,
+  onClosePrint
 }) => {
   const [evalSummary, setEvalSummary] = useState<ClassEvaluationsSummary | null>(null);
   const [tests, setTests] = useState<TypingTest[]>([]);
@@ -107,6 +115,33 @@ export const TeacherEvaluationsSection: React.FC<TeacherEvaluationsSectionProps>
   const [editClassIds, setEditClassIds] = useState<string[]>([]);
   const [isUpdatingTest, setIsUpdatingTest] = useState(false);
   const [editFormError, setEditFormError] = useState<string | null>(null);
+
+  // Export PDF / Print Modal state
+  const [showPrintResultsModal, setShowPrintResultsModal] = useState(false);
+  const [printScope, setPrintScope] = useState<'class' | 'test'>('class');
+  const [printViewType, setPrintViewType] = useState<'summary' | 'detailed'>('summary');
+  const [printOnlyParticipated, setPrintOnlyParticipated] = useState(false);
+  const [printSortOrder, setPrintSortOrder] = useState<'score-desc' | 'name-asc' | 'studentNumber-asc'>('score-desc');
+
+  useEffect(() => {
+    if (autoOpenPrint) {
+      setShowPrintResultsModal(true);
+    }
+  }, [autoOpenPrint]);
+
+  const handleClosePrintModal = () => {
+    setShowPrintResultsModal(false);
+    if (onClosePrint) onClosePrint();
+  };
+
+  const getGradeMention = (score: number, attempted: boolean) => {
+    if (!attempted) return { label: 'Non évalué', color: 'text-slate-500 bg-slate-100 border-slate-200' };
+    if (score >= 16) return { label: 'Très Bien', color: 'text-emerald-800 bg-emerald-50 border-emerald-300' };
+    if (score >= 14) return { label: 'Bien', color: 'text-teal-800 bg-teal-50 border-teal-300' };
+    if (score >= 12) return { label: 'Assez Bien', color: 'text-indigo-800 bg-indigo-50 border-indigo-300' };
+    if (score >= 10) return { label: 'Passable', color: 'text-amber-800 bg-amber-50 border-amber-300' };
+    return { label: 'Insuffisant', color: 'text-rose-800 bg-rose-50 border-rose-300' };
+  };
 
   const fetchData = async () => {
     setLoading(true);
@@ -334,6 +369,21 @@ export const TeacherEvaluationsSection: React.FC<TeacherEvaluationsSectionProps>
     }
   };
 
+  // Filtered & sorted student summaries for Print Modal (.print-area)
+  const printableClassStudents = [...(evalSummary?.studentSummaries || [])]
+    .filter(s => !printOnlyParticipated || s.totalTestsAttempted > 0)
+    .sort((a, b) => {
+      if (printSortOrder === 'score-desc') {
+        if (b.averageScore !== a.averageScore) return b.averageScore - a.averageScore;
+        return b.bestWpm - a.bestWpm;
+      }
+      if (printSortOrder === 'name-asc') {
+        return a.student.lastName.localeCompare(b.student.lastName, 'fr', { sensitivity: 'base' }) ||
+               a.student.firstName.localeCompare(b.student.firstName, 'fr', { sensitivity: 'base' });
+      }
+      return a.student.studentNumber.localeCompare(b.student.studentNumber, 'fr', { numeric: true });
+    });
+
   // Filtered tests for 'manageTests' tab
   const filteredManageTests = tests
     .filter((t) => {
@@ -455,13 +505,29 @@ export const TeacherEvaluationsSection: React.FC<TeacherEvaluationsSectionProps>
           </button>
         </div>
 
-        <button
-          onClick={() => setShowAddTestModal(true)}
-          className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold transition-all shadow-sm shadow-emerald-600/20 cursor-pointer flex-shrink-0"
-        >
-          <Plus className="w-4 h-4" />
-          <span>Créer un test de rapidité</span>
-        </button>
+        <div className="flex items-center gap-2 flex-wrap">
+          <button
+            id="btn-export-pdf-results"
+            type="button"
+            onClick={() => {
+              setPrintScope('class');
+              setShowPrintResultsModal(true);
+            }}
+            className="inline-flex items-center gap-2 px-3.5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold transition-all shadow-sm shadow-indigo-600/20 cursor-pointer flex-shrink-0"
+            title="Générer une version imprimable et exporter les résultats des élèves en PDF"
+          >
+            <Printer className="w-4 h-4" />
+            <span>Exporter en PDF</span>
+          </button>
+
+          <button
+            onClick={() => setShowAddTestModal(true)}
+            className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold transition-all shadow-sm shadow-emerald-600/20 cursor-pointer flex-shrink-0"
+          >
+            <Plus className="w-4 h-4" />
+            <span>Créer un test de rapidité</span>
+          </button>
+        </div>
       </div>
 
       {/* Loading & Error indicators */}
@@ -542,8 +608,23 @@ export const TeacherEvaluationsSection: React.FC<TeacherEvaluationsSectionProps>
                   )}
                 </div>
 
-                <div className="text-[11px] text-slate-500 font-medium">
-                  <strong>{filteredStudentSummaries.length}</strong> sur <strong>{evalSummary?.studentSummaries?.length || 0}</strong> élève{(evalSummary?.studentSummaries?.length || 0) > 1 ? 's' : ''}
+                <div className="flex items-center gap-2">
+                  <div className="text-[11px] text-slate-500 font-medium">
+                    <strong>{filteredStudentSummaries.length}</strong> sur <strong>{evalSummary?.studentSummaries?.length || 0}</strong> élève{(evalSummary?.studentSummaries?.length || 0) > 1 ? 's' : ''}
+                  </div>
+                  <button
+                    id="btn-export-pdf-students-tab"
+                    type="button"
+                    onClick={() => {
+                      setPrintScope('class');
+                      setShowPrintResultsModal(true);
+                    }}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 rounded-xl text-xs font-semibold transition-colors cursor-pointer"
+                    title="Générer une version imprimable et exporter les résultats en PDF"
+                  >
+                    <Printer className="w-3.5 h-3.5" />
+                    <span>Exporter en PDF</span>
+                  </button>
                 </div>
               </div>
 
@@ -893,8 +974,23 @@ export const TeacherEvaluationsSection: React.FC<TeacherEvaluationsSectionProps>
                   )}
                 </div>
 
-                <div className="text-[11px] text-slate-500 font-medium">
-                  <strong>{filteredTestEvaluations.length}</strong> tentative{filteredTestEvaluations.length > 1 ? 's' : ''} affichée{filteredTestEvaluations.length > 1 ? 's' : ''}
+                <div className="flex items-center gap-2">
+                  <div className="text-[11px] text-slate-500 font-medium">
+                    <strong>{filteredTestEvaluations.length}</strong> tentative{filteredTestEvaluations.length > 1 ? 's' : ''} affichée{filteredTestEvaluations.length > 1 ? 's' : ''}
+                  </div>
+                  <button
+                    id="btn-export-pdf-test-tab"
+                    type="button"
+                    onClick={() => {
+                      setPrintScope('test');
+                      setShowPrintResultsModal(true);
+                    }}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 rounded-xl text-xs font-semibold transition-colors cursor-pointer"
+                    title="Générer une version imprimable et exporter les résultats de ce test en PDF"
+                  >
+                    <Printer className="w-3.5 h-3.5" />
+                    <span>Exporter en PDF</span>
+                  </button>
                 </div>
               </div>
 
@@ -1648,6 +1744,392 @@ export const TeacherEvaluationsSection: React.FC<TeacherEvaluationsSectionProps>
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL: EXPORT PDF & VERSION IMPRIMABLE DES RÉSULTATS (.print-area) */}
+      {showPrintResultsModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-3 sm:p-6 overflow-y-auto print-modal">
+          <div className="bg-white rounded-3xl shadow-2xl max-w-5xl w-full border border-slate-200 overflow-hidden my-4 print-card flex flex-col max-h-[92vh]">
+            {/* Modal Control Header (Hidden during Print) */}
+            <div className="p-4 sm:p-5 bg-slate-900 text-white flex flex-col sm:flex-row sm:items-center justify-between gap-3 flex-shrink-0 no-print">
+              <div className="flex items-center gap-3">
+                <div className="p-2.5 bg-indigo-500/20 text-indigo-300 rounded-2xl ring-1 ring-indigo-500/30">
+                  <Printer className="w-6 h-6" />
+                </div>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <h3 className="font-extrabold text-base">
+                      Exporter en PDF — Résultats des élèves
+                    </h3>
+                    <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-indigo-500/30 text-indigo-200 border border-indigo-500/40">
+                      .print-area
+                    </span>
+                  </div>
+                  <p className="text-xs text-slate-400">
+                    Document officiel normalisé prêt pour impression ou enregistrement en PDF ({className})
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <button
+                  id="btn-launch-print-dialog"
+                  type="button"
+                  onClick={() => window.print()}
+                  className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold rounded-xl shadow-md flex items-center gap-2 cursor-pointer transition-colors"
+                  title="Ouvrir la boîte d'impression du navigateur (choisir 'Enregistrer au format PDF')"
+                >
+                  <Printer className="w-4 h-4" />
+                  <span>Lancer l'impression / PDF</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={handleClosePrintModal}
+                  className="text-slate-400 hover:text-white p-2 rounded-xl hover:bg-slate-800 transition-colors cursor-pointer"
+                  title="Fermer la prévisualisation"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+            </div>
+
+            {/* Options Toolbar (Hidden during Print) */}
+            <div className="p-3 sm:p-3.5 bg-slate-100 border-b border-slate-200 flex flex-wrap items-center justify-between gap-3 text-xs flex-shrink-0 no-print">
+              <div className="flex flex-wrap items-center gap-2.5">
+                {/* Scope selector */}
+                <div className="flex items-center gap-1">
+                  <span className="text-slate-600 font-medium">Contenu :</span>
+                  <select
+                    value={printScope}
+                    onChange={(e) => setPrintScope(e.target.value as any)}
+                    className="py-1 px-2.5 bg-white border border-slate-300 rounded-xl font-medium text-slate-800 text-xs focus:ring-1 focus:ring-indigo-500"
+                  >
+                    <option value="class">Relevé général de la classe ({className})</option>
+                    {currentSelectedTest && (
+                      <option value="test">Test en cours : {currentSelectedTest.title}</option>
+                    )}
+                  </select>
+                </div>
+
+                {/* Sort selector */}
+                {printScope === 'class' && (
+                  <div className="flex items-center gap-1">
+                    <span className="text-slate-600 font-medium">Trier par :</span>
+                    <select
+                      value={printSortOrder}
+                      onChange={(e) => setPrintSortOrder(e.target.value as any)}
+                      className="py-1 px-2.5 bg-white border border-slate-300 rounded-xl font-medium text-slate-800 text-xs focus:ring-1 focus:ring-indigo-500"
+                    >
+                      <option value="score-desc">Moyenne (décroissante)</option>
+                      <option value="name-asc">Nom alphabétique (A → Z)</option>
+                      <option value="studentNumber-asc">Identifiant INE</option>
+                    </select>
+                  </div>
+                )}
+
+                {/* Format toggle */}
+                {printScope === 'class' && (
+                  <div className="flex items-center gap-1">
+                    <span className="text-slate-600 font-medium">Format :</span>
+                    <select
+                      value={printViewType}
+                      onChange={(e) => setPrintViewType(e.target.value as any)}
+                      className="py-1 px-2.5 bg-white border border-slate-300 rounded-xl font-medium text-slate-800 text-xs focus:ring-1 focus:ring-indigo-500"
+                    >
+                      <option value="summary">Synthèse (tableau principal)</option>
+                      <option value="detailed">Détaillé (avec relevé de chaque test)</option>
+                    </select>
+                  </div>
+                )}
+
+                {/* Participated only filter */}
+                {printScope === 'class' && (
+                  <label className="flex items-center gap-1.5 cursor-pointer text-slate-700 select-none text-xs">
+                    <input
+                      type="checkbox"
+                      checked={printOnlyParticipated}
+                      onChange={(e) => setPrintOnlyParticipated(e.target.checked)}
+                      className="rounded text-indigo-600 focus:ring-indigo-500 h-3.5 w-3.5 cursor-pointer"
+                    />
+                    <span>Uniquement participants ({(evalSummary?.studentSummaries || []).filter(s => s.totalTestsAttempted > 0).length})</span>
+                  </label>
+                )}
+              </div>
+
+              <div className="text-[11px] text-slate-500 font-medium hidden md:block">
+                💡 Sélectionnez <strong>« Enregistrer au format PDF »</strong> dans la boîte d'impression.
+              </div>
+            </div>
+
+            {/* PRINT AREA CONTAINER: Dedicated printable view using .print-area */}
+            <div className="p-6 sm:p-8 space-y-6 overflow-y-auto bg-white text-slate-900 print-area flex-1">
+              {/* Institutional Header */}
+              <div className="border-b-2 border-slate-900 pb-4">
+                <div className="flex items-start justify-between">
+                  <div>
+                    <p className="text-[10px] font-bold uppercase tracking-widest text-slate-500">
+                      RÉPUBLIQUE TUNISIENNE • MINISTÈRE DE L'ÉDUCATION
+                    </p>
+                    <h2 className="text-lg font-black text-slate-900 mt-0.5 tracking-tight uppercase">
+                      LYCÉE IBN KHALDOUN — LABORATOIRE D'INFORMATIQUE
+                    </h2>
+                    <p className="text-xs text-slate-700 font-bold mt-1">
+                      {printScope === 'class'
+                        ? 'RELEVÉ OFFICIEL DES RÉSULTATS & ÉVALUATIONS DE RAPIDITÉ DE FRAPPE'
+                        : `RÉSULTATS DE L'ÉVALUATION : ${(currentSelectedTest?.title || '').toUpperCase()}`}
+                    </p>
+                  </div>
+                  <div className="text-right text-xs">
+                    <div className="font-extrabold text-slate-900 text-sm px-3 py-1 bg-slate-100 rounded-lg inline-block border border-slate-300">
+                      Classe : {className}
+                    </div>
+                    <p className="text-slate-600 text-[11px] mt-1 font-medium">Année scolaire : 2024-2025</p>
+                    <p className="text-slate-500 text-[10px]">
+                      Édité le {new Date().toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit', year: 'numeric' })} à {new Date().toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })}
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              {/* Statistical Synthesis Cards */}
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-center">
+                <div className="p-3 rounded-xl border border-slate-300 bg-slate-50/70">
+                  <span className="text-[10px] uppercase font-bold text-slate-500 block">Moyenne Classe</span>
+                  <span className="text-xl font-black text-indigo-900 mt-0.5 block">
+                    {printScope === 'class' ? `${evalSummary?.averageScore ?? 0} / 20` : `${testAvgScore} / 20`}
+                  </span>
+                </div>
+                <div className="p-3 rounded-xl border border-slate-300 bg-slate-50/70">
+                  <span className="text-[10px] uppercase font-bold text-slate-500 block">Taux de Réussite</span>
+                  <span className="text-xl font-black text-emerald-800 mt-0.5 block">
+                    {printScope === 'class' ? `${evalSummary?.passRate ?? 0}%` : `${testPassRate}%`}
+                  </span>
+                </div>
+                <div className="p-3 rounded-xl border border-slate-300 bg-slate-50/70">
+                  <span className="text-[10px] uppercase font-bold text-slate-500 block">Vitesse Moyenne</span>
+                  <span className="text-xl font-black text-amber-800 mt-0.5 block">
+                    {printScope === 'class' ? `${evalSummary?.averageWpm ?? 0} WPM` : `${testAvgWpm} WPM`}
+                  </span>
+                </div>
+                <div className="p-3 rounded-xl border border-slate-300 bg-slate-50/70">
+                  <span className="text-[10px] uppercase font-bold text-slate-500 block">Élèves Évalués</span>
+                  <span className="text-xl font-black text-slate-900 mt-0.5 block">
+                    {printScope === 'class'
+                      ? `${(evalSummary?.studentSummaries || []).filter(s => s.totalTestsAttempted > 0).length} / ${evalSummary?.studentSummaries?.length ?? 0}`
+                      : `${rawTestEvaluations.length} soumission${rawTestEvaluations.length > 1 ? 's' : ''}`}
+                  </span>
+                </div>
+              </div>
+
+              {/* General Class Table */}
+              {printScope === 'class' ? (
+                <div className="overflow-hidden border border-slate-300 rounded-xl">
+                  <table className="w-full text-left text-xs border-collapse">
+                    <thead>
+                      <tr className="bg-slate-100 border-b border-slate-300 text-slate-800 uppercase tracking-wider font-bold text-[10px]">
+                        <th className="py-2.5 px-3 text-center w-12 border-r border-slate-300">Rang</th>
+                        <th className="py-2.5 px-3 border-r border-slate-300">Nom & Prénom de l'élève</th>
+                        <th className="py-2.5 px-3 border-r border-slate-300 w-28">Identifiant INE</th>
+                        <th className="py-2.5 px-2 text-center border-r border-slate-300 w-20">Tests Validés</th>
+                        <th className="py-2.5 px-2 text-center border-r border-slate-300 w-24">Note (/20)</th>
+                        <th className="py-2.5 px-2 text-center border-r border-slate-300 w-24">Vitesse (WPM)</th>
+                        <th className="py-2.5 px-2 text-center border-r border-slate-300 w-20">Précision</th>
+                        <th className="py-2.5 px-2 text-center border-r border-slate-300 w-20">Tentatives</th>
+                        <th className="py-2.5 px-3 text-center w-28">Mention</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-200">
+                      {printableClassStudents.length === 0 ? (
+                        <tr>
+                          <td colSpan={9} className="py-8 text-center text-slate-500">
+                            Aucun résultat disponible pour cette sélection.
+                          </td>
+                        </tr>
+                      ) : (
+                        printableClassStudents.map((summary, idx) => {
+                          const mention = getGradeMention(summary.averageScore, summary.totalTestsAttempted > 0);
+                          const studentAvgAccuracy = summary.evaluations && summary.evaluations.length > 0
+                            ? Math.round(summary.evaluations.reduce((acc, ev) => acc + (ev.accuracy || 0), 0) / summary.evaluations.length)
+                            : 0;
+                          return (
+                            <React.Fragment key={summary.student.id}>
+                              <tr className={idx % 2 === 1 ? 'bg-slate-50/70' : 'bg-white'}>
+                                <td className="py-2 px-3 text-center font-bold text-slate-600 border-r border-slate-200">
+                                  {summary.totalTestsAttempted > 0 ? `${idx + 1}` : '—'}
+                                </td>
+                                <td className="py-2 px-3 font-bold text-slate-900 border-r border-slate-200">
+                                  {summary.student.lastName.toUpperCase()} {summary.student.firstName}
+                                  {summary.student.isRepeating && (
+                                    <span className="ml-1.5 text-[9px] font-semibold text-amber-800 bg-amber-100 px-1 py-0.5 rounded border border-amber-300">
+                                      Redoublant
+                                    </span>
+                                  )}
+                                </td>
+                                <td className="py-2 px-3 font-mono text-slate-700 border-r border-slate-200">
+                                  {summary.student.studentNumber}
+                                </td>
+                                <td className="py-2 px-2 text-center font-semibold text-slate-800 border-r border-slate-200">
+                                  {summary.testsPassedCount}
+                                </td>
+                                <td className="py-2 px-2 text-center font-extrabold text-sm border-r border-slate-200 text-indigo-900">
+                                  {summary.totalTestsAttempted > 0 ? `${summary.averageScore.toFixed(1)}` : '—'}
+                                </td>
+                                <td className="py-2 px-2 text-center font-mono text-slate-800 border-r border-slate-200">
+                                  {summary.bestWpm > 0 ? `${summary.bestWpm}` : '—'}
+                                </td>
+                                <td className="py-2 px-2 text-center font-mono text-slate-800 border-r border-slate-200">
+                                  {studentAvgAccuracy > 0 ? `${studentAvgAccuracy}%` : '—'}
+                                </td>
+                                <td className="py-2 px-2 text-center font-mono text-slate-600 border-r border-slate-200">
+                                  {summary.totalTestsAttempted}
+                                </td>
+                                <td className="py-2 px-3 text-center">
+                                  <span className={`inline-block px-2 py-0.5 rounded text-[10px] font-bold border ${mention.color}`}>
+                                    {mention.label}
+                                  </span>
+                                </td>
+                              </tr>
+                              {printViewType === 'detailed' && summary.evaluations && summary.evaluations.length > 0 && (
+                                <tr className="bg-slate-50/80 border-b border-slate-200">
+                                  <td colSpan={9} className="p-3 pl-8">
+                                    <div className="text-[11px] font-bold text-slate-700 mb-1.5 flex items-center gap-1.5">
+                                      <span>Tests réalisés ({summary.evaluations.length}) :</span>
+                                    </div>
+                                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5 text-[10px]">
+                                      {summary.evaluations.map((ev, eIdx) => (
+                                        <div key={eIdx} className="flex items-center justify-between p-1.5 bg-white rounded border border-slate-300">
+                                          <span className="font-medium text-slate-800 truncate mr-2">{ev.testTitle}</span>
+                                          <div className="flex items-center gap-2 font-mono flex-shrink-0">
+                                            <span className="font-bold text-indigo-700">{ev.score}/20</span>
+                                            <span className="text-slate-600">{ev.wpm} WPM</span>
+                                            <span className="text-slate-600">{ev.accuracy}%</span>
+                                            <span className={`px-1.5 py-0.5 rounded text-[9px] font-bold border ${
+                                              ev.passed ? 'text-emerald-800 bg-emerald-50 border-emerald-300' : 'text-rose-800 bg-rose-50 border-rose-300'
+                                            }`}>
+                                              {ev.passed ? 'Validé' : 'Non validé'}
+                                            </span>
+                                          </div>
+                                        </div>
+                                      ))}
+                                    </div>
+                                  </td>
+                                </tr>
+                              )}
+                            </React.Fragment>
+                          );
+                        })
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              ) : (
+                /* By Specific Test Table */
+                <div className="overflow-hidden border border-slate-300 rounded-xl">
+                  <div className="bg-slate-50 p-3 border-b border-slate-300 text-xs">
+                    <h4 className="font-bold text-slate-900">
+                      Critères du test : {currentSelectedTest?.title} ({currentSelectedTest?.theme} • Niveau {currentSelectedTest?.level})
+                    </h4>
+                    <p className="text-slate-600 text-[11px] mt-0.5">
+                      Temps limite : {currentSelectedTest?.timeLimitSeconds}s • Débit minimum : {currentSelectedTest?.minWpm} WPM • Précision minimum : {currentSelectedTest?.minAccuracyPercent}%
+                    </p>
+                  </div>
+                  <table className="w-full text-left text-xs border-collapse">
+                    <thead>
+                      <tr className="bg-slate-100 border-b border-slate-300 text-slate-800 uppercase tracking-wider font-bold text-[10px]">
+                        <th className="py-2.5 px-3 text-center w-12 border-r border-slate-300">N°</th>
+                        <th className="py-2.5 px-3 border-r border-slate-300">Nom & Prénom de l'élève</th>
+                        <th className="py-2.5 px-3 text-center border-r border-slate-300 w-24">Note (/20)</th>
+                        <th className="py-2.5 px-3 text-center border-r border-slate-300 w-24">Vitesse</th>
+                        <th className="py-2.5 px-3 text-center border-r border-slate-300 w-20">Précision</th>
+                        <th className="py-2.5 px-3 text-center border-r border-slate-300 w-20">Erreurs</th>
+                        <th className="py-2.5 px-3 text-center border-r border-slate-300 w-24">Temps</th>
+                        <th className="py-2.5 px-3 text-center border-r border-slate-300 w-24">Statut</th>
+                        <th className="py-2.5 px-3 text-right">Date de passation</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-200">
+                      {rawTestEvaluations.length === 0 ? (
+                        <tr>
+                          <td colSpan={9} className="py-8 text-center text-slate-500">
+                            Aucun élève n'a encore complété cette évaluation.
+                          </td>
+                        </tr>
+                      ) : (
+                        rawTestEvaluations.map((ev, idx) => (
+                          <tr key={ev.id} className={idx % 2 === 1 ? 'bg-slate-50/70' : 'bg-white'}>
+                            <td className="py-2 px-3 text-center font-bold text-slate-600 border-r border-slate-200">
+                              {idx + 1}
+                            </td>
+                            <td className="py-2 px-3 font-bold text-slate-900 border-r border-slate-200">
+                              {ev.studentName}
+                            </td>
+                            <td className="py-2 px-3 text-center font-extrabold text-sm border-r border-slate-200 text-indigo-900">
+                              {ev.score} / 20
+                            </td>
+                            <td className="py-2 px-3 text-center font-mono text-slate-800 border-r border-slate-200">
+                              {ev.wpm} WPM
+                            </td>
+                            <td className="py-2 px-3 text-center font-mono text-slate-800 border-r border-slate-200">
+                              {ev.accuracy}%
+                            </td>
+                            <td className="py-2 px-3 text-center font-mono text-slate-800 border-r border-slate-200">
+                              {ev.mistakesCount}
+                            </td>
+                            <td className="py-2 px-3 text-center font-mono text-slate-800 border-r border-slate-200">
+                              {ev.timeSpentSeconds}s
+                            </td>
+                            <td className="py-2 px-3 text-center border-r border-slate-200">
+                              <span className={`inline-block px-2 py-0.5 rounded text-[10px] font-bold border ${
+                                ev.passed ? 'bg-emerald-50 text-emerald-800 border-emerald-300' : 'bg-rose-50 text-rose-800 border-rose-300'
+                              }`}>
+                                {ev.passed ? 'Validé' : 'Non validé'}
+                              </span>
+                            </td>
+                            <td className="py-2 px-3 text-right font-mono text-slate-600 text-[11px]">
+                              {new Date(ev.completedAt).toLocaleString('fr-FR', {
+                                day: '2-digit',
+                                month: '2-digit',
+                                year: 'numeric',
+                                hour: '2-digit',
+                                minute: '2-digit'
+                              })}
+                            </td>
+                          </tr>
+                        ))
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+
+              {/* Document Official Footer */}
+              <div className="pt-4 border-t-2 border-slate-300 grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs">
+                <div>
+                  <h4 className="font-bold text-slate-800 uppercase tracking-wider text-[10px] mb-1.5">
+                    Échelle d'évaluation & Mentions officielles
+                  </h4>
+                  <div className="grid grid-cols-2 gap-1 text-[10px] text-slate-700">
+                    <div>• 16 à 20 : <strong>Très Bien</strong></div>
+                    <div>• 14 à 15.9 : <strong>Bien</strong></div>
+                    <div>• 12 à 13.9 : <strong>Assez Bien</strong></div>
+                    <div>• 10 à 11.9 : <strong>Passable</strong></div>
+                    <div className="col-span-2">• Moins de 10 : <strong>Insuffisant / À consolider</strong></div>
+                  </div>
+                </div>
+
+                <div className="border border-slate-300 rounded-xl p-3 bg-slate-50/60 flex flex-col justify-between min-h-[95px]">
+                  <div className="flex justify-between items-center text-[11px] font-bold text-slate-800">
+                    <span>Observations & Visa du Professeur :</span>
+                    <span className="font-normal text-slate-500 text-[10px]">Date et signature :</span>
+                  </div>
+                  <div className="text-right text-[10px] text-slate-500 italic pt-6">
+                    Lycée Ibn Khaldoun • Enseignant d'Informatique
+                  </div>
+                </div>
+              </div>
+            </div>
           </div>
         </div>
       )}

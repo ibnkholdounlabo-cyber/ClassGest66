@@ -2648,8 +2648,8 @@ for m in matieres:
         SUM(CASE WHEN r.status = 'late' THEN 1 ELSE 0 END) as lateCount,
         SUM(CASE WHEN r.status = 'excused' THEN 1 ELSE 0 END) as excusedCount,
         SUM(COALESCE(r.score, 0)) as totalScore,
-        SUM(CASE WHEN r.optionsJson LIKE '%opt-no-notebook%' THEN 1 ELSE 0 END) as noNotebookCount,
-        SUM(CASE WHEN r.optionsJson LIKE '%opt-excluded%' THEN 1 ELSE 0 END) as excludedCount
+        SUM(CASE WHEN r.optionsJson LIKE '%absence_cahier%' OR r.optionsJson LIKE '%opt-no-notebook%' THEN 1 ELSE 0 END) as noNotebookCount,
+        SUM(CASE WHEN r.optionsJson LIKE '%exclu%' OR r.optionsJson LIKE '%opt-excluded%' THEN 1 ELSE 0 END) as excludedCount
       FROM attendance_records r
       JOIN attendance_sessions s ON s.id = r.sessionId
       WHERE s.classId = ? AND r.studentId = ?
@@ -2695,7 +2695,12 @@ for m in matieres:
     let totalUnprepared = 0;
     let totalChatter = 0;
     let totalMissingMaterial = 0;
+    let totalParticipation = 0;
+    let totalTravailSerieux = 0;
     let totalPositive = 0;
+    let totalAbsences = 0;
+    let totalLate = 0;
+    let totalExcused = 0;
     let scoreSum = 0;
 
     const studentRecordsStmt = this.db.prepare(`
@@ -2703,6 +2708,7 @@ for m in matieres:
         r.optionsJson,
         r.score,
         r.notes,
+        r.status,
         s.title as sessionTitle,
         s.date as sessionDate
       FROM attendance_records r
@@ -2712,6 +2718,7 @@ for m in matieres:
     `);
 
     const studentStats: ClassDisciplineStats['studentStats'] = [];
+    const studentSummaries: NonNullable<ClassDisciplineStats['studentSummaries']> = [];
 
     for (const st of students) {
       const records = studentRecordsStmt.all(classId, st.id) as any[];
@@ -2721,7 +2728,13 @@ for m in matieres:
       let unpreparedCount = 0;
       let chatterCount = 0;
       let missingMaterialCount = 0;
+      let participationCount = 0;
+      let travailSerieuxCount = 0;
       let positiveCount = 0;
+      let absentCount = 0;
+      let lateCount = 0;
+      let excusedCount = 0;
+      let presentCount = 0;
       let lastObservation: string | undefined = undefined;
 
       for (const rec of records) {
@@ -2730,34 +2743,59 @@ for m in matieres:
           lastObservation = String(rec.notes.trim());
         }
 
+        const status = (rec.status || 'present') as AttendanceStatus;
+        if (status === 'absent') {
+          absentCount++;
+          totalAbsences++;
+        } else if (status === 'late') {
+          lateCount++;
+          totalLate++;
+        } else if (status === 'excused') {
+          excusedCount++;
+          totalExcused++;
+        } else if (status === 'present') {
+          presentCount++;
+        }
+
         const optStr = String(rec.optionsJson || '');
-        if (optStr.includes('opt-no-notebook')) {
+        if (optStr.includes('absence_cahier') || optStr.includes('opt-no-notebook')) {
           noNotebookCount++;
           totalNoNotebook++;
         }
-        if (optStr.includes('opt-excluded')) {
+        if (optStr.includes('exclu') || optStr.includes('opt-excluded')) {
           excludedCount++;
           totalExcluded++;
         }
-        if (optStr.includes('opt-unprepared')) {
-          unpreparedCount++;
-          totalUnprepared++;
-        }
-        if (optStr.includes('opt-chatter')) {
-          chatterCount++;
-          totalChatter++;
-        }
-        if (optStr.includes('opt-no-material')) {
+        if (optStr.includes('oubli_materiel') || optStr.includes('opt-no-material')) {
           missingMaterialCount++;
           totalMissingMaterial++;
         }
-        if (optStr.includes('opt-participated') || optStr.includes('opt-bonus')) {
+        if (optStr.includes('travail_non_fait') || optStr.includes('opt-unprepared')) {
+          unpreparedCount++;
+          totalUnprepared++;
+        }
+        if (optStr.includes('bavardage') || optStr.includes('opt-chatter')) {
+          chatterCount++;
+          totalChatter++;
+        }
+        if (optStr.includes('participation') || optStr.includes('opt-participated')) {
+          participationCount++;
+          totalParticipation++;
+          positiveCount++;
+          totalPositive++;
+        }
+        if (optStr.includes('travail_serieux') || optStr.includes('opt-bonus')) {
+          travailSerieuxCount++;
+          totalTravailSerieux++;
           positiveCount++;
           totalPositive++;
         }
       }
 
       scoreSum += cumulativeScore;
+      const totalEffective = presentCount + absentCount + lateCount + excusedCount;
+      const attendanceRate = totalEffective > 0 ? Math.round(((presentCount + (lateCount * 0.8)) / totalEffective) * 100) : 100;
+      const totalStudentAbsences = absentCount + excusedCount;
 
       studentStats.push({
         studentId: st.id,
@@ -2766,6 +2804,12 @@ for m in matieres:
         studentNumber: st.studentNumber,
         isRepeating: Boolean(st.isRepeating),
         cumulativeScore,
+        absentCount,
+        excusedCount,
+        lateCount,
+        presentCount,
+        totalAbsences: totalStudentAbsences,
+        attendanceRate,
         noNotebookCount,
         excludedCount,
         unpreparedCount,
@@ -2774,12 +2818,41 @@ for m in matieres:
         positiveCount,
         lastObservation
       });
+
+      studentSummaries.push({
+        id: st.id,
+        studentId: st.id,
+        firstName: st.firstName,
+        lastName: st.lastName,
+        studentNumber: st.studentNumber,
+        isRepeating: Boolean(st.isRepeating),
+        totalScore: cumulativeScore,
+        absentCount,
+        excusedCount,
+        lateCount,
+        presentCount,
+        totalAbsences: totalStudentAbsences,
+        attendanceRate,
+        optionCounts: {
+          absence_cahier: noNotebookCount,
+          exclu: excludedCount,
+          oubli_materiel: missingMaterialCount,
+          travail_non_fait: unpreparedCount,
+          bavardage: chatterCount,
+          participation: participationCount,
+          travail_serieux: travailSerieuxCount
+        },
+        lastNotes: lastObservation
+      });
     }
 
     const averageScore = students.length > 0 ? Number((scoreSum / students.length).toFixed(1)) : 0;
 
     return {
       totalSessions,
+      totalAbsences,
+      totalLate,
+      totalExcused,
       totalNoNotebook,
       totalExcluded,
       totalUnprepared,
@@ -2787,6 +2860,19 @@ for m in matieres:
       totalMissingMaterial,
       totalPositive,
       averageScore,
+      globalCounts: {
+        absence_cahier: totalNoNotebook,
+        exclu: totalExcluded,
+        oubli_materiel: totalMissingMaterial,
+        travail_non_fait: totalUnprepared,
+        bavardage: totalChatter,
+        participation: totalParticipation,
+        travail_serieux: totalTravailSerieux,
+        absences: totalAbsences,
+        retards: totalLate,
+        excuses: totalExcused
+      },
+      studentSummaries,
       studentStats
     };
   }

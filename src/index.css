@@ -6,11 +6,31 @@
   }
   body {
     background: white !important;
+    color: black !important;
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
   }
   .print-area {
     max-height: none !important;
     overflow: visible !important;
     background: transparent !important;
     padding: 0 !important;
+    width: 100% !important;
+  }
+  .print-modal {
+    position: static !important;
+    background: transparent !important;
+    padding: 0 !important;
+    overflow: visible !important;
+    display: block !important;
+    inset: auto !important;
+  }
+  .print-card {
+    border: none !important;
+    box-shadow: none !important;
+    max-width: 100% !important;
+    margin: 0 !important;
+    border-radius: 0 !important;
+    overflow: visible !important;
   }
 }
