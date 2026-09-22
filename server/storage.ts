@@ -1889,16 +1889,26 @@ for m in matieres:
   // QCM (QUIZ) MANAGEMENT & EVALUATION
   // ==========================================
   public getQCMsByClass(classId: string, forStudent = false): QCM[] {
-    const query = forStudent
-      ? `SELECT DISTINCT q.* FROM qcms q
-         WHERE (q.classId = ? OR q.id IN (SELECT qcmId FROM qcm_classes WHERE classId = ?))
-         AND q.isActive = 1
-         ORDER BY q.createdAt ASC`
-      : `SELECT DISTINCT q.* FROM qcms q
-         WHERE (q.classId = ? OR q.id IN (SELECT qcmId FROM qcm_classes WHERE classId = ?))
-         ORDER BY q.createdAt ASC`;
+    const isAll = !classId || classId === 'all' || classId === 'undefined';
+    const query = isAll
+      ? (forStudent
+          ? `SELECT DISTINCT q.* FROM qcms q
+             WHERE q.isActive = 1
+             ORDER BY q.createdAt DESC`
+          : `SELECT DISTINCT q.* FROM qcms q
+             ORDER BY q.createdAt DESC`)
+      : (forStudent
+          ? `SELECT DISTINCT q.* FROM qcms q
+             WHERE (q.classId = ? OR q.id IN (SELECT qcmId FROM qcm_classes WHERE classId = ?))
+             AND q.isActive = 1
+             ORDER BY q.createdAt DESC`
+          : `SELECT DISTINCT q.* FROM qcms q
+             WHERE (q.classId = ? OR q.id IN (SELECT qcmId FROM qcm_classes WHERE classId = ?))
+             ORDER BY q.createdAt DESC`);
 
-    const rows = this.db.prepare(query).all(classId, classId) as any[];
+    const rows = isAll
+      ? (this.db.prepare(query).all() as any[])
+      : (this.db.prepare(query).all(classId, classId) as any[]);
 
     return rows.map(r => {
       const qCount = (this.db.prepare('SELECT COUNT(*) as c FROM qcm_questions WHERE qcmId = ?').get(r.id) as any)?.c || 0;

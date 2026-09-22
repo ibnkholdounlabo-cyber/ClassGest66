@@ -550,8 +550,20 @@ export const api = {
   // QCM (QUESTIONNAIRES & QUIZ)
   // ==========================================
   async getQCMs(token: string, classId: string): Promise<QCM[]> {
+    const validClassId = classId && classId.trim() ? encodeURIComponent(classId.trim()) : 'all';
     return safeFetchJson<QCM[]>(
-      `${API_BASE}/classes/${classId}/qcms`,
+      `${API_BASE}/classes/${validClassId}/qcms`,
+      {
+        headers: { Authorization: `Bearer ${token}` }
+      },
+      'Impossible de charger la liste des QCM'
+    );
+  },
+
+  async teacherGetAllQCMs(token: string, classId?: string): Promise<QCM[]> {
+    const query = classId && classId !== 'all' ? `?classId=${encodeURIComponent(classId)}` : '';
+    return safeFetchJson<QCM[]>(
+      `${API_BASE}/teacher/qcms${query}`,
       {
         headers: { Authorization: `Bearer ${token}` }
       },

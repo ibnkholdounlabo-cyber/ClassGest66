@@ -848,6 +848,17 @@ async function startServer() {
   // ==========================================
   // QCM (QUESTIONNAIRES & QUIZ)
   // ==========================================
+  // Teacher: get all QCMs (optionally filter by classId query param)
+  app.get('/api/teacher/qcms', requireTeacher, (req, res) => {
+    try {
+      const classId = (req.query.classId as string) || 'all';
+      const qcms = db.getQCMsByClass(classId, false);
+      res.json(qcms);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   // List QCMs for a class (Auth: Teacher sees all, Student sees active ones)
   app.get('/api/classes/:classId/qcms', requireAuth, (req, res) => {
     const session = (req as any).user;

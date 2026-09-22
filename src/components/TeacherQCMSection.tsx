@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import {
   HelpCircle,
   Plus,
@@ -106,6 +106,8 @@ export const TeacherQCMSection: React.FC<TeacherQCMSectionProps> = ({
 
   // Create/Edit form fields
   const [formTitle, setFormTitle] = useState('');
+  const [titleError, setTitleError] = useState('');
+  const titleInputRef = useRef<HTMLInputElement>(null);
   const [formCategory, setFormCategory] = useState<'Word' | 'Excel' | 'Python' | 'Général'>('Général');
   const [formDescription, setFormDescription] = useState('');
   const [formDurationMinutes, setFormDurationMinutes] = useState<number>(15);
@@ -114,6 +116,7 @@ export const TeacherQCMSection: React.FC<TeacherQCMSectionProps> = ({
   const [formInitialQuestions, setFormInitialQuestions] = useState('');
   const [availableClasses, setAvailableClasses] = useState<ClassGroup[]>(classes || []);
   const [formSelectedClassIds, setFormSelectedClassIds] = useState<string[]>([]);
+  const [selectedClassFilter, setSelectedClassFilter] = useState<string>('all');
 
   // Robust form & action states
   const [modalError, setModalError] = useState<string | null>(null);
@@ -165,15 +168,17 @@ export const TeacherQCMSection: React.FC<TeacherQCMSectionProps> = ({
 
   useEffect(() => {
     loadQCMs();
-  }, [classId, token]);
+  }, [classId, selectedClassFilter, token]);
 
   const loadQCMs = async () => {
     try {
       setLoading(true);
       setErrorMessage('');
-      const data = await api.getQCMs(token, classId);
+      const target = selectedClassFilter === 'all' ? (classId || 'all') : selectedClassFilter;
+      const data = await api.getQCMs(token, target);
       setQcms(data);
     } catch (err: any) {
+      console.error('Erreur chargement QCM:', err);
       setErrorMessage(err.message || 'Erreur lors du chargement des QCM');
     } finally {
       setLoading(false);
@@ -191,7 +196,9 @@ export const TeacherQCMSection: React.FC<TeacherQCMSectionProps> = ({
   };
 
   const handleOpenCreate = () => {
-    setFormTitle('');
+    const defaultTitle = className && className !== 'Classe' ? `Évaluation QCM - ${className}` : 'Évaluation QCM';
+    setFormTitle(defaultTitle);
+    setTitleError('');
     setFormCategory('Général');
     setFormDescription('');
     setFormDurationMinutes(15);
@@ -213,11 +220,16 @@ export const TeacherQCMSection: React.FC<TeacherQCMSectionProps> = ({
 
     setEditingQcm(null);
     setShowCreateModal(true);
+    setTimeout(() => {
+      titleInputRef.current?.focus();
+      titleInputRef.current?.select();
+    }, 100);
   };
 
   const handleOpenEdit = (qcm: QCM) => {
     setEditingQcm(qcm);
     setFormTitle(qcm.title);
+    setTitleError('');
     setFormCategory(qcm.category);
     setFormDescription(qcm.description || '');
     setFormDurationMinutes(qcm.durationMinutes || 0);
@@ -232,30 +244,35 @@ export const TeacherQCMSection: React.FC<TeacherQCMSectionProps> = ({
       : (qcm.classId ? [qcm.classId] : []);
     setFormSelectedClassIds(assignedIds.filter(Boolean));
     setShowCreateModal(true);
+    setTimeout(() => {
+      titleInputRef.current?.focus();
+    }, 100);
   };
 
-  const handleSaveQCM = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const handleSaveQCM = async (e?: React.SyntheticEvent) => {
+    if (e) e.preventDefault();
+    if (isSavingQcm) return;
     setModalError(null);
+    setTitleError('');
 
     const trimmedTitle = formTitle.trim();
     if (!trimmedTitle) {
-      setModalError('Le titre du QCM est obligatoire.');
+      setTitleError('Le titre du QCM est obligatoire.');
+      setModalError('Le titre du QCM est obligatoire. Veuillez saisir un intitulé pour ce questionnaire.');
+      titleInputRef.current?.focus();
       return;
     }
 
-    const validClassIds = formSelectedClassIds.filter(Boolean);
+    // Ensure we have at least one valid class selected, falling back gracefully
+    let validClassIds = formSelectedClassIds.filter(Boolean);
     if (validClassIds.length === 0) {
-      setModalError('Veuillez cocher au moins une classe autorisée à voir ce QCM.');
-      return;
-    }
-
-    // If initial questions provided in create mode, validate that at least one question is recognized
-    if (!editingQcm && formInitialQuestions.trim()) {
-      const parsed = parseQcmImportText(formInitialQuestions);
-      if (parsed.questions.length > 0 && parsed.validCount === 0) {
-        setModalError('Toutes les questions saisies sont incomplètes ou non reconnues. Vérifiez la syntaxe (format tube « | », tableau Excel, ou liste A/B/C/D).');
-        return;
+      const fallbackClass = classId || availableClasses[0]?.id || (classes && classes[0]?.id) || '';
+      if (fallbackClass) {
+        validClassIds = [fallbackClass];
+        setFormSelectedClassIds([fallbackClass]);
+      } else if (availableClasses.length > 0) {
+        validClassIds = availableClasses.map(c => c.id);
+        setFormSelectedClassIds(validClassIds);
       }
     }
 
@@ -263,27 +280,31 @@ export const TeacherQCMSection: React.FC<TeacherQCMSectionProps> = ({
       setIsSavingQcm(true);
 
       if (editingQcm) {
-        await api.teacherUpdateQCM(token, editingQcm.id, {
+        const updated = await api.teacherUpdateQCM(token, editingQcm.id, {
           title: trimmedTitle,
           category: formCategory,
           description: formDescription.trim(),
-          durationMinutes: Number(formDurationMinutes),
-          totalPoints: Number(formTotalPoints),
+          durationMinutes: Number(formDurationMinutes) || 0,
+          totalPoints: Number(formTotalPoints) || 20,
           isActive: formIsActive,
           classIds: validClassIds
         });
-        notifySuccess(`QCM "${trimmedTitle}" mis à jour avec succès (${validClassIds.length} classe${validClassIds.length > 1 ? 's' : ''} assignée${validClassIds.length > 1 ? 's' : ''}).`);
+        setQcms(prev => prev.map(q => (q.id === updated.id ? updated : q)));
+        notifySuccess(`QCM « ${trimmedTitle} » mis à jour avec succès (${validClassIds.length} classe${validClassIds.length > 1 ? 's' : ''} assignée${validClassIds.length > 1 ? 's' : ''}).`);
       } else {
-        const targetClass = classId || validClassIds[0] || availableClasses[0]?.id || 'default';
+        const targetClass = validClassIds[0] || classId || availableClasses[0]?.id || 'all';
         const created = await api.teacherCreateQCM(token, targetClass, {
           title: trimmedTitle,
           category: formCategory,
           description: formDescription.trim(),
-          durationMinutes: Number(formDurationMinutes),
-          totalPoints: Number(formTotalPoints),
+          durationMinutes: Number(formDurationMinutes) || 0,
+          totalPoints: Number(formTotalPoints) || 20,
           isActive: formIsActive,
           classIds: validClassIds
         });
+
+        // Immediately reflect in state so it appears on screen without delay!
+        setQcms(prev => [created, ...prev.filter(q => q.id !== created.id)]);
 
         // If user also entered questions in the creation modal, import them now
         let importedCount = 0;
@@ -291,17 +312,21 @@ export const TeacherQCMSection: React.FC<TeacherQCMSectionProps> = ({
           try {
             const importRes = await api.teacherImportQCMQuestions(token, created.id, formInitialQuestions.trim(), true);
             importedCount = importRes.questionCount || 0;
+            if (importedCount > 0) {
+              setQcms(prev => prev.map(q => q.id === created.id ? { ...q, questionCount: importedCount } : q));
+            }
           } catch (importErr: any) {
             console.warn('Questions import error after creation:', importErr);
-            notifyError(`Le QCM a été créé, mais l'import des questions a échoué : ${importErr.message || 'Format invalide'}`);
+            notifyError(`Le QCM a été créé avec succès ! Cependant, l'import des questions a échoué (${importErr.message || 'Syntaxe'}). Vous pouvez les ajouter manuellement.`);
           }
         }
 
         const importMsg = importedCount > 0 ? ` avec ${importedCount} question${importedCount > 1 ? 's' : ''}` : '';
-        notifySuccess(`QCM "${trimmedTitle}" créé avec succès${importMsg} (${validClassIds.length} classe${validClassIds.length > 1 ? 's' : ''}) !`);
+        notifySuccess(`QCM « ${trimmedTitle} » créé avec succès${importMsg} (${validClassIds.length} classe${validClassIds.length > 1 ? 's' : ''}) !`);
       }
 
       setShowCreateModal(false);
+      // Background reload to sync server metrics
       await loadQCMs();
     } catch (err: any) {
       console.error('Erreur enregistrement QCM:', err);
@@ -480,8 +505,12 @@ export const TeacherQCMSection: React.FC<TeacherQCMSectionProps> = ({
         qcmStatusFilter === 'all' ||
         (qcmStatusFilter === 'active' && q.isActive) ||
         (qcmStatusFilter === 'draft' && !q.isActive);
+      const matchesClass =
+        selectedClassFilter === 'all' ||
+        q.classId === selectedClassFilter ||
+        (Array.isArray(q.classIds) && q.classIds.includes(selectedClassFilter));
 
-      return matchesSearch && matchesCategory && matchesStatus;
+      return matchesSearch && matchesCategory && matchesStatus && matchesClass;
     })
     .sort((a, b) => {
       if (qcmSortBy === 'date-desc') return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
@@ -632,6 +661,24 @@ export const TeacherQCMSection: React.FC<TeacherQCMSectionProps> = ({
               <option value="draft">Brouillon (Masqué)</option>
             </select>
           </div>
+
+          {/* Class Filter */}
+          {availableClasses.length > 0 && (
+            <div className="flex items-center gap-1">
+              <School className="w-3.5 h-3.5 text-slate-400" />
+              <span className="text-slate-500 text-[11px]">Classe :</span>
+              <select
+                value={selectedClassFilter}
+                onChange={(e) => setSelectedClassFilter(e.target.value)}
+                className="py-1 px-2.5 bg-slate-50 border border-slate-200 rounded-xl font-medium text-slate-700"
+              >
+                <option value="all">Toutes ({availableClasses.length})</option>
+                {availableClasses.map(c => (
+                  <option key={c.id} value={c.id}>{c.name}</option>
+                ))}
+              </select>
+            </div>
+          )}
 
           {/* Sort */}
           <div className="flex items-center gap-1">
@@ -1843,17 +1890,40 @@ export const TeacherQCMSection: React.FC<TeacherQCMSectionProps> = ({
               </button>
             </div>
 
-            <form onSubmit={handleSaveQCM} className="p-6 space-y-4 text-xs">
+            <form onSubmit={handleSaveQCM} noValidate className="p-6 space-y-4 text-xs">
+              {modalError && (
+                <div className="p-3.5 bg-rose-50 border border-rose-200 text-rose-800 rounded-xl text-xs flex items-center gap-2.5 font-medium animate-in fade-in">
+                  <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
+                  <span className="flex-1 font-semibold">{modalError}</span>
+                </div>
+              )}
+
               <div>
-                <label className="block font-semibold text-slate-700 mb-1">Titre du QCM *</label>
+                <label className="block font-semibold text-slate-700 mb-1">
+                  Titre du QCM <span className="text-rose-500 font-bold">*</span>
+                </label>
                 <input
+                  ref={titleInputRef}
                   type="text"
-                  required
                   value={formTitle}
-                  onChange={e => setFormTitle(e.target.value)}
+                  onChange={e => {
+                    setFormTitle(e.target.value);
+                    if (titleError) setTitleError('');
+                    if (modalError) setModalError(null);
+                  }}
                   placeholder="Ex: Évaluation Word : Typographie et Raccourcis"
-                  className="w-full h-10 px-3 bg-slate-50 border border-slate-300 rounded-xl text-xs focus:ring-2 focus:ring-indigo-500"
+                  className={`w-full h-10 px-3 bg-slate-50 border rounded-xl text-xs transition-all ${
+                    titleError
+                      ? 'border-rose-400 ring-2 ring-rose-200 bg-rose-50/50 text-slate-900'
+                      : 'border-slate-300 focus:ring-2 focus:ring-indigo-500'
+                  }`}
                 />
+                {titleError && (
+                  <p className="text-[11px] text-rose-600 font-semibold mt-1 flex items-center gap-1">
+                    <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                    <span>{titleError}</span>
+                  </p>
+                )}
               </div>
 
               <div className="grid grid-cols-2 gap-3">
@@ -1983,49 +2053,56 @@ export const TeacherQCMSection: React.FC<TeacherQCMSectionProps> = ({
                 </div>
 
                 {/* Liste des classes avec cases à cocher */}
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1 max-h-52 overflow-y-auto pr-1">
-                  {availableClasses.map(c => {
-                    const isChecked = formSelectedClassIds.includes(c.id);
-                    const isCurrent = c.id === classId;
-                    return (
-                      <label
-                        key={c.id}
-                        className={`flex items-center gap-2.5 p-2.5 rounded-xl border transition-all cursor-pointer text-xs select-none ${
-                          isChecked
-                            ? 'bg-indigo-50/80 border-indigo-300 text-indigo-950 ring-1 ring-indigo-200 font-semibold'
-                            : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'
-                        }`}
-                      >
-                        <input
-                          type="checkbox"
-                          checked={isChecked}
-                          onChange={() => toggleClassSelection(c.id)}
-                          className="w-4 h-4 text-indigo-600 rounded focus:ring-indigo-500 cursor-pointer shrink-0"
-                        />
-                        <div className="flex-1 min-w-0">
-                          <div className="flex items-center gap-1.5 flex-wrap">
-                            <span className="font-bold truncate">{c.name}</span>
-                            {isCurrent && (
-                              <span className="text-[9px] bg-indigo-200 text-indigo-800 px-1.5 py-0.5 rounded font-bold uppercase tracking-wider">
-                                Active
+                {availableClasses.length === 0 ? (
+                  <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl text-slate-600 text-xs flex items-center gap-2">
+                    <CheckCircle2 className="w-4 h-4 text-indigo-600 shrink-0" />
+                    <span>Assignation automatique à la classe en cours <strong>({className || 'Classe active'})</strong>.</span>
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1 max-h-52 overflow-y-auto pr-1">
+                    {availableClasses.map(c => {
+                      const isChecked = formSelectedClassIds.includes(c.id);
+                      const isCurrent = c.id === classId;
+                      return (
+                        <label
+                          key={c.id}
+                          className={`flex items-center gap-2.5 p-2.5 rounded-xl border transition-all cursor-pointer text-xs select-none ${
+                            isChecked
+                              ? 'bg-indigo-50/80 border-indigo-300 text-indigo-950 ring-1 ring-indigo-200 font-semibold'
+                              : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'
+                          }`}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={isChecked}
+                            onChange={() => toggleClassSelection(c.id)}
+                            className="w-4 h-4 text-indigo-600 rounded focus:ring-indigo-500 cursor-pointer shrink-0"
+                          />
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-1.5 flex-wrap">
+                              <span className="font-bold truncate">{c.name}</span>
+                              {isCurrent && (
+                                <span className="text-[9px] bg-indigo-200 text-indigo-800 px-1.5 py-0.5 rounded font-bold uppercase tracking-wider">
+                                  Active
+                                </span>
+                              )}
+                            </div>
+                            {c.level && (
+                              <span className="text-[10px] text-slate-400 block truncate">
+                                Niveau : {c.level}
                               </span>
                             )}
                           </div>
-                          {c.level && (
-                            <span className="text-[10px] text-slate-400 block truncate">
-                              Niveau : {c.level}
-                            </span>
-                          )}
-                        </div>
-                      </label>
-                    );
-                  })}
-                </div>
+                        </label>
+                      );
+                    })}
+                  </div>
+                )}
 
-                {formSelectedClassIds.length === 0 && (
-                  <p className="text-[11px] text-rose-600 font-semibold flex items-center gap-1.5 pt-1">
-                    <AlertCircle className="w-3.5 h-3.5 shrink-0" />
-                    Attention : Au moins une classe doit être cochée pour que le questionnaire soit assigné.
+                {formSelectedClassIds.length === 0 && availableClasses.length > 0 && (
+                  <p className="text-[11px] text-amber-700 bg-amber-50 border border-amber-200 p-2 rounded-xl font-medium flex items-center gap-1.5 pt-1">
+                    <AlertCircle className="w-3.5 h-3.5 shrink-0 text-amber-600" />
+                    <span>Astuce : Si aucune case n'est cochée, le QCM sera automatiquement assigné à votre classe active ({className}).</span>
                   </p>
                 )}
               </div>
@@ -2137,8 +2214,12 @@ export const TeacherQCMSection: React.FC<TeacherQCMSectionProps> = ({
                 </button>
                 <button
                   type="submit"
+                  id="btn-confirm-save-qcm"
                   disabled={isSavingQcm}
-                  className="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-60 text-white rounded-xl text-xs font-bold shadow-md shadow-indigo-500/20 cursor-pointer flex items-center gap-2 transition-all"
+                  onClick={(e) => {
+                    handleSaveQCM(e);
+                  }}
+                  className="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-700 active:scale-95 disabled:opacity-60 text-white rounded-xl text-xs font-bold shadow-md shadow-indigo-500/20 cursor-pointer flex items-center gap-2 transition-all"
                 >
                   {isSavingQcm ? (
                     <>
