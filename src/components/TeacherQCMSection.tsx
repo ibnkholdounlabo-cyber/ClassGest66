@@ -67,6 +67,7 @@ export const TeacherQCMSection: React.FC<TeacherQCMSectionProps> = ({
   const [evalSubSearch, setEvalSubSearch] = useState('');
   const [evalSubScoreFilter, setEvalSubScoreFilter] = useState<'all' | 'pass' | 'fail' | 'high'>('all');
   const [evalSubSortBy, setEvalSubSortBy] = useState<'score-desc' | 'score-asc' | 'name-asc' | 'time-asc' | 'date-desc'>('score-desc');
+  const [evalSubClassFilter, setEvalSubClassFilter] = useState<string>('all');
 
   // Filter & sort for question stats in evaluation modal
   const [evalQuestionSearch, setEvalQuestionSearch] = useState('');
@@ -499,6 +500,7 @@ export const TeacherQCMSection: React.FC<TeacherQCMSectionProps> = ({
     setExpandedQuestionId(null);
     setCopyFilter('all');
     setShowAllCopiesModal(false);
+    setEvalSubClassFilter(classId && classId !== 'all' ? classId : 'all');
     try {
       setLoadingEvaluations(true);
       const summary = await api.teacherGetQCMEvaluations(token, qcm.id);
@@ -572,30 +574,128 @@ export const TeacherQCMSection: React.FC<TeacherQCMSectionProps> = ({
       return (a.questionOrder ?? 0) - (b.questionOrder ?? 0);
     });
 
-  const filteredSubmissions = (evaluationData?.submissions || [])
-    .filter(sub => {
-      const q = evalSubSearch.toLowerCase().trim();
-      const matchesSearch = !q || (
-        sub.studentName.toLowerCase().includes(q) ||
-        (sub.studentNumber && sub.studentNumber.toLowerCase().includes(q))
-      );
-      let matchesScore = true;
-      if (evalSubScoreFilter === 'pass') matchesScore = sub.score20 >= 10;
-      else if (evalSubScoreFilter === 'fail') matchesScore = sub.score20 < 10;
-      else if (evalSubScoreFilter === 'high') matchesScore = sub.score20 >= 16;
-
-      return matchesSearch && matchesScore;
-    })
-    .sort((a, b) => {
-      if (evalSubSortBy === 'score-desc') return b.score20 - a.score20;
-      if (evalSubSortBy === 'score-asc') return a.score20 - b.score20;
-      if (evalSubSortBy === 'name-asc') return a.studentName.localeCompare(b.studentName, 'fr');
-      if (evalSubSortBy === 'time-asc') return a.timeSpentSeconds - b.timeSpentSeconds;
-      if (evalSubSortBy === 'date-desc') return new Date(b.completedAt).getTime() - new Date(a.completedAt).getTime();
-      return 0;
+  // Distinct classes that have submissions for this QCM or are assigned to it
+  const evalClassesList = useMemo(() => {
+    if (!evaluationData?.submissions) return [];
+    const map = new Map<string, { id: string; name: string; count: number }>();
+    evaluationData.submissions.forEach(sub => {
+      const cid = sub.classId || 'unknown';
+      const cname = sub.className || availableClasses.find(c => c.id === cid)?.name || 'Classe';
+      if (!map.has(cid)) {
+        map.set(cid, { id: cid, name: cname, count: 0 });
+      }
+      map.get(cid)!.count++;
     });
+    // Also include any availableClasses that are assigned to the QCM if not in map
+    availableClasses.forEach(c => {
+      if (!map.has(c.id)) {
+        const qcm = evaluationData.qcm || evaluationQcm;
+        const isAssigned = qcm?.classId === c.id || (Array.isArray(qcm?.classIds) && qcm.classIds.includes(c.id));
+        if (isAssigned) {
+          map.set(c.id, { id: c.id, name: c.name, count: 0 });
+        }
+      }
+    });
+    return Array.from(map.values()).sort((a, b) => a.name.localeCompare(b.name, 'fr'));
+  }, [evaluationData, availableClasses, evaluationQcm]);
 
-  const filteredQuestionStats = (evaluationData?.questionStats || [])
+  // Selected class display name
+  const selectedClassDisplayName = useMemo(() => {
+    if (evalSubClassFilter === 'all') return 'Toutes les classes';
+    const found = evalClassesList.find(c => c.id === evalSubClassFilter || c.name === evalSubClassFilter);
+    return found ? found.name : (availableClasses.find(c => c.id === evalSubClassFilter)?.name || evalSubClassFilter);
+  }, [evalSubClassFilter, evalClassesList, availableClasses]);
+
+  // Submissions filtered strictly by the chosen class filter
+  const classFilteredSubmissions = useMemo(() => {
+    if (!evaluationData?.submissions) return [];
+    if (evalSubClassFilter === 'all') return evaluationData.submissions;
+    return evaluationData.submissions.filter(s =>
+      s.classId === evalSubClassFilter || s.className === evalSubClassFilter
+    );
+  }, [evaluationData, evalSubClassFilter]);
+
+  // Evaluation summary metrics dynamically calculated based on class filter
+  const evalMetrics = useMemo(() => {
+    const subs = classFilteredSubmissions;
+    const count = subs.length;
+    if (count === 0) {
+      return { total: 0, avg20: 0, highest20: 0, lowest20: 0 };
+    }
+    const sum = subs.reduce((acc, s) => acc + (s.score20 || 0), 0);
+    const avg20 = Math.round((sum / count) * 10) / 10;
+    const highest20 = Math.max(...subs.map(s => s.score20 || 0));
+    const lowest20 = Math.min(...subs.map(s => s.score20 || 0));
+    return { total: count, avg20, highest20, lowest20 };
+  }, [classFilteredSubmissions]);
+
+  // Submissions filtered by search, score filter and sorted
+  const filteredSubmissions = useMemo(() => {
+    return classFilteredSubmissions
+      .filter(sub => {
+        const q = evalSubSearch.toLowerCase().trim();
+        const matchesSearch = !q || (
+          sub.studentName.toLowerCase().includes(q) ||
+          (sub.studentNumber && sub.studentNumber.toLowerCase().includes(q)) ||
+          (sub.className && sub.className.toLowerCase().includes(q))
+        );
+        let matchesScore = true;
+        if (evalSubScoreFilter === 'pass') matchesScore = sub.score20 >= 10;
+        else if (evalSubScoreFilter === 'fail') matchesScore = sub.score20 < 10;
+        else if (evalSubScoreFilter === 'high') matchesScore = sub.score20 >= 16;
+
+        return matchesSearch && matchesScore;
+      })
+      .sort((a, b) => {
+        if (evalSubSortBy === 'score-desc') return b.score20 - a.score20;
+        if (evalSubSortBy === 'score-asc') return a.score20 - b.score20;
+        if (evalSubSortBy === 'name-asc') return a.studentName.localeCompare(b.studentName, 'fr');
+        if (evalSubSortBy === 'time-asc') return a.timeSpentSeconds - b.timeSpentSeconds;
+        if (evalSubSortBy === 'date-desc') return new Date(b.completedAt).getTime() - new Date(a.completedAt).getTime();
+        return 0;
+      });
+  }, [classFilteredSubmissions, evalSubSearch, evalSubScoreFilter, evalSubSortBy]);
+
+  // Pedagogical question stats dynamically recomputed for the selected class filter
+  const effectiveQuestionStats = useMemo(() => {
+    if (!evaluationData) return [];
+    const questions = evaluationData.qcm?.questions || evaluationQcm?.questions || [];
+    const subs = classFilteredSubmissions;
+
+    return questions.map((q, idx) => {
+      let totalAnswers = 0;
+      let correctAnswers = 0;
+
+      subs.forEach(sub => {
+        let answersMap: Record<string, any> = {};
+        if (typeof sub.answersJson === 'string') {
+          try { answersMap = JSON.parse(sub.answersJson); } catch {}
+        } else if (sub.answersJson && typeof sub.answersJson === 'object') {
+          answersMap = sub.answersJson as any;
+        }
+        const foundRaw = answersMap[q.id] ?? answersMap[String(q.id)] ?? answersMap[String(q.questionOrder)] ?? answersMap[String(idx + 1)];
+        if (foundRaw) {
+          totalAnswers++;
+          const chosen = (typeof foundRaw === 'string' ? foundRaw : foundRaw?.chosen || '').toUpperCase().trim();
+          const isCorrect = foundRaw?.isCorrect !== undefined ? Boolean(foundRaw.isCorrect) : (chosen === q.correctOption);
+          if (isCorrect) correctAnswers++;
+        }
+      });
+
+      const successRate = totalAnswers > 0 ? Math.round((correctAnswers / totalAnswers) * 100) : 0;
+
+      return {
+        questionId: q.id,
+        questionOrder: q.questionOrder ?? (idx + 1),
+        questionText: q.questionText,
+        totalAnswers,
+        correctAnswers,
+        successRate
+      };
+    });
+  }, [evaluationData, evaluationQcm, classFilteredSubmissions]);
+
+  const filteredQuestionStats = effectiveQuestionStats
     .filter(stat => {
       const q = evalQuestionSearch.toLowerCase().trim();
       const matchesText = !q || stat.questionText.toLowerCase().includes(q);
@@ -1557,7 +1657,7 @@ export const TeacherQCMSection: React.FC<TeacherQCMSectionProps> = ({
                   <h3 className="font-bold text-base">Résultats & Notes de la Classe</h3>
                 </div>
                 <p className="text-xs text-slate-400 mt-0.5">
-                  QCM : <strong className="text-white">{evaluationQcm.title}</strong> • Classe : {className}
+                  QCM : <strong className="text-white">{evaluationQcm.title}</strong> • Classe : <span className="text-indigo-300 font-bold">{selectedClassDisplayName}</span>
                 </p>
               </div>
               <div className="flex items-center gap-2">
@@ -1596,26 +1696,94 @@ export const TeacherQCMSection: React.FC<TeacherQCMSectionProps> = ({
                 </div>
               ) : (
                 <>
+                  {/* Class Filter Bar */}
+                  <div className="bg-slate-50 border border-slate-200 rounded-2xl p-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-3 no-print">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <div className="flex items-center gap-1.5 text-xs font-bold text-slate-700 mr-1">
+                        <School className="w-4 h-4 text-indigo-600" />
+                        <span>Filtrer par classe :</span>
+                      </div>
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <button
+                          type="button"
+                          onClick={() => setEvalSubClassFilter('all')}
+                          className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer inline-flex items-center gap-1.5 ${
+                            evalSubClassFilter === 'all'
+                              ? 'bg-indigo-600 text-white shadow-xs'
+                              : 'bg-white text-slate-700 border border-slate-200 hover:bg-slate-100'
+                          }`}
+                        >
+                          <span>Toutes les classes</span>
+                          <span className={`px-1.5 py-0.2 rounded-full text-[10px] ${
+                            evalSubClassFilter === 'all' ? 'bg-indigo-800 text-white' : 'bg-slate-100 text-slate-600'
+                          }`}>
+                            {evaluationData.submissions.length}
+                          </span>
+                        </button>
+
+                        {evalClassesList.map(c => (
+                          <button
+                            key={c.id}
+                            type="button"
+                            onClick={() => setEvalSubClassFilter(c.id)}
+                            className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer inline-flex items-center gap-1.5 ${
+                              evalSubClassFilter === c.id || evalSubClassFilter === c.name
+                                ? 'bg-indigo-600 text-white shadow-xs'
+                                : 'bg-white text-slate-700 border border-slate-200 hover:bg-slate-100'
+                            }`}
+                          >
+                            <span>{c.name}</span>
+                            <span className={`px-1.5 py-0.2 rounded-full text-[10px] ${
+                              (evalSubClassFilter === c.id || evalSubClassFilter === c.name) ? 'bg-indigo-800 text-white' : 'bg-indigo-50 text-indigo-700'
+                            }`}>
+                              {c.count} {c.count > 1 ? 'copies' : 'copie'}
+                            </span>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    {evalClassesList.length > 2 && (
+                      <div className="flex items-center gap-1.5 text-xs text-slate-600 self-end sm:self-auto">
+                        <span className="font-semibold text-slate-500">Sélection :</span>
+                        <select
+                          value={evalSubClassFilter}
+                          onChange={(e) => setEvalSubClassFilter(e.target.value)}
+                          className="h-8 px-2.5 bg-white border border-slate-200 rounded-xl text-xs font-bold text-slate-800 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                        >
+                          <option value="all">Toutes les classes ({evaluationData.submissions.length})</option>
+                          {evalClassesList.map(c => (
+                            <option key={c.id} value={c.id}>{c.name} ({c.count} copies)</option>
+                          ))}
+                        </select>
+                      </div>
+                    )}
+                  </div>
+
                   {/* Summary Metric Cards */}
                   <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
                     <div className="p-4 rounded-2xl bg-indigo-50 border border-indigo-100 text-center">
-                      <p className="text-[10px] uppercase font-bold text-indigo-500 tracking-wider">Copies remises</p>
-                      <p className="text-2xl font-black text-indigo-900 mt-1">{evaluationData.totalSubmissions}</p>
+                      <p className="text-[10px] uppercase font-bold text-indigo-500 tracking-wider">
+                        {evalSubClassFilter !== 'all' ? `Copies (${selectedClassDisplayName})` : 'Copies remises'}
+                      </p>
+                      <p className="text-2xl font-black text-indigo-900 mt-1">{evalMetrics.total}</p>
                     </div>
 
                     <div className="p-4 rounded-2xl bg-emerald-50 border border-emerald-100 text-center">
-                      <p className="text-[10px] uppercase font-bold text-emerald-600 tracking-wider">Moyenne Classe</p>
-                      <p className="text-2xl font-black text-emerald-900 mt-1">{evaluationData.averageScore20} / 20</p>
+                      <p className="text-[10px] uppercase font-bold text-emerald-600 tracking-wider">
+                        {evalSubClassFilter !== 'all' ? `Moyenne (${selectedClassDisplayName})` : 'Moyenne Classe'}
+                      </p>
+                      <p className="text-2xl font-black text-emerald-900 mt-1">{evalMetrics.avg20} / 20</p>
                     </div>
 
                     <div className="p-4 rounded-2xl bg-sky-50 border border-sky-100 text-center">
                       <p className="text-[10px] uppercase font-bold text-sky-600 tracking-wider">Meilleure Note</p>
-                      <p className="text-2xl font-black text-sky-900 mt-1">{evaluationData.highestScore20} / 20</p>
+                      <p className="text-2xl font-black text-sky-900 mt-1">{evalMetrics.highest20} / 20</p>
                     </div>
 
                     <div className="p-4 rounded-2xl bg-amber-50 border border-amber-100 text-center">
                       <p className="text-[10px] uppercase font-bold text-amber-700 tracking-wider">Note Minimum</p>
-                      <p className="text-2xl font-black text-amber-900 mt-1">{evaluationData.lowestScore20} / 20</p>
+                      <p className="text-2xl font-black text-amber-900 mt-1">{evalMetrics.lowest20} / 20</p>
                     </div>
                   </div>
 
@@ -1624,8 +1792,13 @@ export const TeacherQCMSection: React.FC<TeacherQCMSectionProps> = ({
                     <div className="flex flex-wrap items-center justify-between gap-3 mb-2.5">
                       <div className="flex flex-wrap items-center gap-2">
                         <h4 className="text-xs font-bold text-slate-900 uppercase tracking-wider">
-                          Relevé des notes des élèves ({filteredSubmissions.length} / {evaluationData.submissions.length})
+                          Relevé des notes des élèves ({filteredSubmissions.length} / {classFilteredSubmissions.length})
                         </h4>
+                        {evalSubClassFilter !== 'all' && (
+                          <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-indigo-100 text-indigo-800">
+                            Classe : {selectedClassDisplayName}
+                          </span>
+                        )}
                         <button
                           type="button"
                           onClick={() => setShowAllCopiesModal(true)}
@@ -1707,6 +1880,7 @@ export const TeacherQCMSection: React.FC<TeacherQCMSectionProps> = ({
                                 {evalSubSortBy === 'name-asc' ? <ArrowUp className="w-3 h-3 text-indigo-600" /> : <ArrowUpDown className="w-3 h-3 text-slate-400 opacity-60" />}
                               </div>
                             </th>
+                            <th className="p-3">Classe</th>
                             <th className="p-3">Identifiant</th>
                             <th
                               onClick={() => setEvalSubSortBy(prev => prev === 'score-desc' ? 'score-asc' : 'score-desc')}
@@ -1748,8 +1922,8 @@ export const TeacherQCMSection: React.FC<TeacherQCMSectionProps> = ({
                         <tbody className="divide-y divide-slate-100">
                           {filteredSubmissions.length === 0 ? (
                             <tr>
-                              <td colSpan={7} className="p-8 text-center text-slate-400">
-                                Aucun résultat ne correspond à votre filtre.
+                              <td colSpan={8} className="p-8 text-center text-slate-400">
+                                Aucun résultat ne correspond à votre filtre{evalSubClassFilter !== 'all' ? ` pour la classe ${selectedClassDisplayName}` : ''}.
                               </td>
                             </tr>
                           ) : (
@@ -1762,6 +1936,11 @@ export const TeacherQCMSection: React.FC<TeacherQCMSectionProps> = ({
                             return (
                               <tr key={sub.id} className="hover:bg-slate-50 transition-colors">
                                 <td className="p-3 font-bold text-slate-900">{sub.studentName}</td>
+                                <td className="p-3 whitespace-nowrap">
+                                  <span className="px-2 py-0.5 rounded-md font-semibold text-[11px] bg-slate-100 text-slate-700 border border-slate-200">
+                                    {sub.className || availableClasses.find(c => c.id === sub.classId)?.name || 'Classe'}
+                                  </span>
+                                </td>
                                 <td className="p-3 font-mono text-[11px] text-slate-500">{sub.studentNumber}</td>
                                 <td className="p-3 text-center">
                                   <span className={`px-2.5 py-1 rounded-full font-black text-xs border ${badgeBg}`}>
@@ -1793,22 +1972,28 @@ export const TeacherQCMSection: React.FC<TeacherQCMSectionProps> = ({
                                 </td>
                               </tr>
                             );
-                          }))}
-                        </tbody>
-                      </table>
-                    </div>
+                          })
+                        )}
+                      </tbody>
+                    </table>
                   </div>
+                </div>
 
                   {/* Question Success Rates Analytics */}
                   {evaluationData.questionStats && evaluationData.questionStats.length > 0 && (
                     <div className="pt-2">
                       <div className="flex flex-wrap items-center justify-between gap-3 mb-2.5">
                         <div>
-                          <h4 className="text-xs font-bold text-slate-900 uppercase tracking-wider flex items-center gap-1.5">
+                          <h4 className="text-xs font-bold text-slate-900 uppercase tracking-wider flex items-center gap-1.5 flex-wrap">
                             <span>Taux de réussite par question (Pédagogie)</span>
                             <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-indigo-100 text-indigo-800">
-                              {filteredQuestionStats.length} / {evaluationData.questionStats.length}
+                              {filteredQuestionStats.length} / {effectiveQuestionStats.length}
                             </span>
+                            {evalSubClassFilter !== 'all' && (
+                              <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-indigo-100 text-indigo-800 normal-case">
+                                Classe : {selectedClassDisplayName}
+                              </span>
+                            )}
                           </h4>
                           <p className="text-[11px] text-slate-500 mt-0.5">
                             Cliquez sur une question pour afficher le détail pédagogique, les options et la répartition des réponses.
@@ -1870,12 +2055,12 @@ export const TeacherQCMSection: React.FC<TeacherQCMSectionProps> = ({
                       {/* Quick filter chips for pedagogy */}
                       <div className="flex flex-wrap items-center gap-1.5 mb-3 text-[11px]">
                         {[
-                          { id: 'all', label: 'Toutes', count: evaluationData.questionStats.length },
-                          { id: 'difficult', label: 'Difficiles (< 50%)', count: evaluationData.questionStats.filter(s => s.successRate < 50).length },
-                          { id: 'critical', label: 'Critiques (< 30%)', count: evaluationData.questionStats.filter(s => s.successRate < 30).length },
-                          { id: 'medium', label: 'Moyennes (50-75%)', count: evaluationData.questionStats.filter(s => s.successRate >= 50 && s.successRate < 75).length },
-                          { id: 'mastered', label: 'Maîtrisées (≥ 75%)', count: evaluationData.questionStats.filter(s => s.successRate >= 75).length },
-                          { id: 'with-errors', label: 'Avec erreurs', count: evaluationData.questionStats.filter(s => (s.totalAnswers - s.correctAnswers) > 0).length }
+                          { id: 'all', label: 'Toutes', count: effectiveQuestionStats.length },
+                          { id: 'difficult', label: 'Difficiles (< 50%)', count: effectiveQuestionStats.filter(s => s.successRate < 50).length },
+                          { id: 'critical', label: 'Critiques (< 30%)', count: effectiveQuestionStats.filter(s => s.successRate < 30).length },
+                          { id: 'medium', label: 'Moyennes (50-75%)', count: effectiveQuestionStats.filter(s => s.successRate >= 50 && s.successRate < 75).length },
+                          { id: 'mastered', label: 'Maîtrisées (≥ 75%)', count: effectiveQuestionStats.filter(s => s.successRate >= 75).length },
+                          { id: 'with-errors', label: 'Avec erreurs', count: effectiveQuestionStats.filter(s => (s.totalAnswers - s.correctAnswers) > 0).length }
                         ].map(chip => (
                           <button
                             key={chip.id}
@@ -1913,7 +2098,7 @@ export const TeacherQCMSection: React.FC<TeacherQCMSectionProps> = ({
                             const studentsPassed: string[] = [];
                             const studentsFailed: string[] = [];
 
-                            evaluationData.submissions.forEach(sub => {
+                            classFilteredSubmissions.forEach(sub => {
                               let ansObj: any = null;
                               if (sub.answersJson && typeof sub.answersJson === 'object') {
                                 ansObj = (sub.answersJson as any)[stat.questionId];
@@ -2178,7 +2363,7 @@ export const TeacherQCMSection: React.FC<TeacherQCMSectionProps> = ({
                       </span>
                     </div>
                     <p className="text-xs text-slate-300 mt-1">
-                      Élève : <strong className="text-white text-sm">{inspectingSubmission.studentName}</strong> • N° {inspectingSubmission.studentNumber || '—'}
+                      Élève : <strong className="text-white text-sm">{inspectingSubmission.studentName}</strong> • Classe : <span className="text-indigo-300 font-bold">{inspectingSubmission.className || availableClasses.find(c => c.id === inspectingSubmission.classId)?.name || selectedClassDisplayName}</span> • N° {inspectingSubmission.studentNumber || '—'}
                     </p>
                     <p className="text-[11px] text-slate-400">
                       QCM : <strong className="text-indigo-300">{evaluationQcm.title}</strong>
@@ -2452,7 +2637,7 @@ export const TeacherQCMSection: React.FC<TeacherQCMSectionProps> = ({
                   <h3 className="font-bold text-base">Vue globale de toutes les réponses de la classe</h3>
                 </div>
                 <p className="text-xs text-slate-400 mt-1">
-                  QCM : <strong className="text-white">{evaluationQcm.title}</strong> • Total : {evaluationData.submissions.length} copie{evaluationData.submissions.length > 1 ? 's' : ''}
+                  QCM : <strong className="text-white">{evaluationQcm.title}</strong> • Classe : <span className="text-indigo-300 font-bold">{selectedClassDisplayName}</span> • Total : {classFilteredSubmissions.length} copie{classFilteredSubmissions.length > 1 ? 's' : ''}
                 </p>
               </div>
               <div className="flex items-center gap-2">
@@ -2475,11 +2660,47 @@ export const TeacherQCMSection: React.FC<TeacherQCMSectionProps> = ({
             </div>
 
             <div className="p-6 max-h-[75vh] overflow-y-auto print-area space-y-4">
+              {/* Class filter in global view */}
+              {evalClassesList.length > 0 && (
+                <div className="flex flex-wrap items-center gap-2 p-3 bg-slate-50 border border-slate-200 rounded-2xl text-xs no-print">
+                  <span className="font-bold text-slate-700 flex items-center gap-1.5">
+                    <School className="w-4 h-4 text-indigo-600" />
+                    Filtrer par classe :
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setEvalSubClassFilter('all')}
+                    className={`px-3 py-1 rounded-xl font-bold text-xs transition-all cursor-pointer ${
+                      evalSubClassFilter === 'all'
+                        ? 'bg-indigo-600 text-white shadow-xs'
+                        : 'bg-white text-slate-700 border border-slate-200 hover:bg-slate-100'
+                    }`}
+                  >
+                    Toutes les classes ({evaluationData.submissions.length})
+                  </button>
+                  {evalClassesList.map(c => (
+                    <button
+                      key={c.id}
+                      type="button"
+                      onClick={() => setEvalSubClassFilter(c.id)}
+                      className={`px-3 py-1 rounded-xl font-bold text-xs transition-all cursor-pointer ${
+                        evalSubClassFilter === c.id || evalSubClassFilter === c.name
+                          ? 'bg-indigo-600 text-white shadow-xs'
+                          : 'bg-white text-slate-700 border border-slate-200 hover:bg-slate-100'
+                      }`}
+                    >
+                      {c.name} ({c.count})
+                    </button>
+                  ))}
+                </div>
+              )}
+
               <div className="overflow-x-auto border border-slate-200 rounded-2xl">
                 <table className="w-full text-left text-xs">
                   <thead className="bg-slate-100 text-slate-700 font-bold border-b border-slate-200">
                     <tr>
                       <th className="p-3">Élève</th>
+                      <th className="p-3">Classe</th>
                       <th className="p-3 text-center">Note / 20</th>
                       {(evaluationData.qcm?.questions || evaluationQcm.questions || []).map((q, idx) => (
                         <th key={q.id} className="p-3 text-center min-w-[70px]" title={`Q${idx + 1}: ${q.questionText}`}>
@@ -2491,7 +2712,14 @@ export const TeacherQCMSection: React.FC<TeacherQCMSectionProps> = ({
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
-                    {evaluationData.submissions.map(sub => {
+                    {classFilteredSubmissions.length === 0 ? (
+                      <tr>
+                        <td colSpan={(evaluationData.qcm?.questions || evaluationQcm.questions || []).length + 4} className="p-8 text-center text-slate-400">
+                          Aucune copie pour la classe sélectionnée ({selectedClassDisplayName}).
+                        </td>
+                      </tr>
+                    ) : (
+                      classFilteredSubmissions.map(sub => {
                       const questions = evaluationData.qcm?.questions || evaluationQcm.questions || [];
                       let answersMap: Record<string, any> = {};
                       if (typeof sub.answersJson === 'string') {
@@ -2505,6 +2733,11 @@ export const TeacherQCMSection: React.FC<TeacherQCMSectionProps> = ({
                           <td className="p-3">
                             <strong className="text-slate-900 block">{sub.studentName}</strong>
                             <span className="text-[11px] text-slate-400 font-mono">N° {sub.studentNumber}</span>
+                          </td>
+                          <td className="p-3 whitespace-nowrap">
+                            <span className="px-2 py-0.5 rounded-md font-semibold text-[11px] bg-slate-100 text-slate-700 border border-slate-200">
+                              {sub.className || availableClasses.find(c => c.id === sub.classId)?.name || 'Classe'}
+                            </span>
                           </td>
                           <td className="p-3 text-center">
                             <span className={`px-2 py-0.5 rounded-full font-black text-xs ${
@@ -2548,7 +2781,7 @@ export const TeacherQCMSection: React.FC<TeacherQCMSectionProps> = ({
                           </td>
                         </tr>
                       );
-                    })}
+                    }))}
                   </tbody>
                 </table>
               </div>

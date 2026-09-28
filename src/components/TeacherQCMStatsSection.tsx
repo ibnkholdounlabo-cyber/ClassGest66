@@ -17,7 +17,8 @@ import {
   X,
   Calendar,
   Layers,
-  ChevronDown
+  ChevronDown,
+  School
 } from 'lucide-react';
 import { api } from '../api';
 import { QCMAttempt, QCMGlobalStats, QCMQuestionAnalysis } from '../types';
@@ -41,6 +42,7 @@ export const TeacherQCMStatsSection: React.FC<TeacherQCMStatsSectionProps> = ({
   const [activeTab, setActiveTab] = useState<'analytics' | 'history'>('analytics');
 
   // Filters for analytics
+  const [selectedClassFilter, setSelectedClassFilter] = useState<string>('all');
   const [selectedQcmFilter, setSelectedQcmFilter] = useState<string>('all');
   const [selectedCategoryFilter, setSelectedCategoryFilter] = useState<string>('all');
   const [selectedLevelFilter, setSelectedLevelFilter] = useState<string>('all');
@@ -62,8 +64,12 @@ export const TeacherQCMStatsSection: React.FC<TeacherQCMStatsSectionProps> = ({
     setError(null);
     try {
       const [statsData, attemptsData] = await Promise.all([
-        api.getTeacherQCMStats(token).catch(() => null),
-        api.getTeacherQCMAttempts(token).catch(() => [])
+        api.getTeacherQCMStats(token, {
+          classId: selectedClassFilter !== 'all' ? selectedClassFilter : undefined
+        }).catch(() => null),
+        api.getTeacherQCMAttempts(token, {
+          classId: selectedClassFilter !== 'all' ? selectedClassFilter : undefined
+        }).catch(() => [])
       ]);
       if (statsData) {
         setGlobalStats(statsData);
@@ -85,7 +91,7 @@ export const TeacherQCMStatsSection: React.FC<TeacherQCMStatsSectionProps> = ({
 
   useEffect(() => {
     fetchData();
-  }, [token]);
+  }, [token, selectedClassFilter]);
 
   // Overall totals
   const totalAttemptsCount = attempts.length;
@@ -268,6 +274,24 @@ export const TeacherQCMStatsSection: React.FC<TeacherQCMStatsSectionProps> = ({
           {/* Filters Bar */}
           <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm flex flex-col md:flex-row md:items-center justify-between gap-3">
             <div className="flex flex-wrap items-center gap-3">
+              {/* Class filter */}
+              {classes.length > 0 && (
+                <div className="flex items-center gap-1.5 text-xs text-slate-600">
+                  <School className="w-3.5 h-3.5 text-slate-400" />
+                  <span className="font-semibold">Classe :</span>
+                  <select
+                    value={selectedClassFilter}
+                    onChange={(e) => setSelectedClassFilter(e.target.value)}
+                    className="px-2.5 py-1.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-medium text-slate-800 focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
+                  >
+                    <option value="all">Toutes les classes</option>
+                    {classes.map(c => (
+                      <option key={c.id} value={c.id}>{c.name}</option>
+                    ))}
+                  </select>
+                </div>
+              )}
+
               {/* QCM filter */}
               <div className="flex items-center gap-1.5 text-xs text-slate-600">
                 <Filter className="w-3.5 h-3.5 text-slate-400" />

@@ -746,10 +746,20 @@ export const api = {
     );
   },
 
-  async getTeacherQCMAttempts(token: string, studentId?: string, qcmId?: string): Promise<QCMAttempt[]> {
+  async getTeacherQCMAttempts(
+    token: string,
+    studentIdOrFilters?: string | { studentId?: string; qcmId?: string; classId?: string },
+    qcmId?: string
+  ): Promise<QCMAttempt[]> {
     const params = new URLSearchParams();
-    if (studentId) params.append('studentId', studentId);
-    if (qcmId && qcmId !== 'all') params.append('qcmId', qcmId);
+    if (typeof studentIdOrFilters === 'string') {
+      if (studentIdOrFilters) params.append('studentId', studentIdOrFilters);
+      if (qcmId && qcmId !== 'all') params.append('qcmId', qcmId);
+    } else if (studentIdOrFilters && typeof studentIdOrFilters === 'object') {
+      if (studentIdOrFilters.studentId) params.append('studentId', studentIdOrFilters.studentId);
+      if (studentIdOrFilters.qcmId && studentIdOrFilters.qcmId !== 'all') params.append('qcmId', studentIdOrFilters.qcmId);
+      if (studentIdOrFilters.classId && studentIdOrFilters.classId !== 'all') params.append('classId', studentIdOrFilters.classId);
+    }
     const queryString = params.toString() ? `?${params.toString()}` : '';
 
     return safeFetchJson<QCMAttempt[]>(
@@ -944,9 +954,12 @@ export const api = {
     );
   },
 
-  async teacherGetQCMEvaluations(token: string, qcmId: string): Promise<QCMEvaluationSummary> {
+  async teacherGetQCMEvaluations(token: string, qcmId: string, classId?: string): Promise<QCMEvaluationSummary> {
+    const url = classId && classId !== 'all'
+      ? `${API_BASE}/teacher/qcms/${qcmId}/evaluations?classId=${encodeURIComponent(classId)}`
+      : `${API_BASE}/teacher/qcms/${qcmId}/evaluations`;
     return safeFetchJson<QCMEvaluationSummary>(
-      `${API_BASE}/teacher/qcms/${qcmId}/evaluations`,
+      url,
       {
         headers: { Authorization: `Bearer ${token}` }
       },

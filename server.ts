@@ -1021,15 +1021,15 @@ async function startServer() {
     }
   });
 
-  // Teacher: Get QCM attempts (by studentId or qcmId)
+  // Teacher: Get QCM attempts (by studentId or qcmId or classId)
   app.get('/api/teacher/qcm-attempts', requireTeacher, (req, res) => {
-    const { studentId, qcmId } = req.query as any;
+    const { studentId, qcmId, classId } = req.query as any;
     try {
       if (studentId) {
         const attempts = db.getStudentQCMAttempts(studentId, qcmId);
         return res.json(attempts);
       }
-      const stats = db.getQCMGlobalStats({ qcmId });
+      const stats = db.getQCMGlobalStats({ qcmId, classId });
       res.json(stats.attempts);
     } catch (err: any) {
       res.status(500).json({ error: err.message });
@@ -1229,7 +1229,8 @@ async function startServer() {
   // Teacher: Get evaluations & statistics for a QCM (all student grades & question success rates)
   app.get('/api/teacher/qcms/:id/evaluations', requireTeacher, (req, res) => {
     try {
-      const evals = db.getQCMEvaluations(req.params.id);
+      const classId = req.query.classId as string | undefined;
+      const evals = db.getQCMEvaluations(req.params.id, classId);
       res.json(evals);
     } catch (err: any) {
       res.status(500).json({ error: err.message });

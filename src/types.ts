@@ -258,6 +258,7 @@ export interface QCMSubmission {
   qcmId: string;
   studentId: string;
   classId: string;
+  className?: string;
   totalScore: number;
   maxScore: number;
   score20: number;
@@ -283,7 +284,7 @@ export interface QCMEvaluationSummary {
   averageScore20: number;
   highestScore20: number;
   lowestScore20: number;
-  submissions: Array<QCMSubmission & { studentName: string; studentNumber: string }>;
+  submissions: Array<QCMSubmission & { studentName: string; studentNumber: string; className?: string }>;
   questionStats: Array<{
     questionId: string;
     questionOrder: number;

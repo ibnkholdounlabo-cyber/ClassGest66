@@ -3063,26 +3063,39 @@ for m in matieres:
     };
   }
 
-  public getQCMEvaluations(qcmId: string): QCMEvaluationSummary {
+  public getQCMEvaluations(qcmId: string, filterClassId?: string): QCMEvaluationSummary {
     const qcm = this.getQCMById(qcmId, false);
     if (!qcm) throw new Error('QCM introuvable');
 
-    const subsRows = this.db.prepare(`
-      SELECT qs.*, s.firstName, s.lastName, s.studentNumber
+    let subsQuery = `
+      SELECT qs.*, s.firstName, s.lastName, s.studentNumber, s.classId as studentClassId,
+             COALESCE(c.name, c2.name, 'Classe') as className
       FROM qcm_submissions qs
       JOIN students s ON s.id = qs.studentId
+      LEFT JOIN classes c ON c.id = qs.classId
+      LEFT JOIN classes c2 ON c2.id = s.classId
       WHERE qs.qcmId = ?
-      ORDER BY qs.score20 DESC, qs.completedAt DESC
-    `).all(qcmId) as any[];
+    `;
+    const params: any[] = [qcmId];
 
-    const submissions: Array<QCMSubmission & { studentName: string; studentNumber: string }> = subsRows.map(row => {
+    if (filterClassId && filterClassId !== 'all') {
+      subsQuery += ` AND (qs.classId = ? OR s.classId = ?)`;
+      params.push(filterClassId, filterClassId);
+    }
+
+    subsQuery += ` ORDER BY qs.score20 DESC, qs.completedAt DESC`;
+
+    const subsRows = this.db.prepare(subsQuery).all(...params) as any[];
+
+    const submissions: Array<QCMSubmission & { studentName: string; studentNumber: string; className: string }> = subsRows.map(row => {
       let answersJson = {};
       try { answersJson = JSON.parse(row.answersJson); } catch {}
       return {
         id: String(row.id),
         qcmId: String(row.qcmId),
         studentId: String(row.studentId),
-        classId: String(row.classId),
+        classId: String(row.classId || row.studentClassId || ''),
+        className: String(row.className || ''),
         totalScore: Number(row.totalScore),
         maxScore: Number(row.maxScore),
         score20: Number(row.score20),
