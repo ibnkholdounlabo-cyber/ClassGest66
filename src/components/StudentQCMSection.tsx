@@ -13,10 +13,14 @@ import {
   Check,
   Sparkles,
   BookOpen,
-  RefreshCw
+  RefreshCw,
+  History,
+  Calendar,
+  Eye,
+  TrendingUp
 } from 'lucide-react';
 import { api } from '../api';
-import { StudentQCMStatus, QCM, QCMQuestion, QCMSubmission } from '../types';
+import { StudentQCMStatus, QCM, QCMQuestion, QCMSubmission, QCMAttempt } from '../types';
 
 interface StudentQCMSectionProps {
   classId: string;
@@ -45,6 +49,11 @@ export const StudentQCMSection: React.FC<StudentQCMSectionProps> = ({ classId, t
   const [showSubmitConfirm, setShowSubmitConfirm] = useState(false);
   const [showExitConfirm, setShowExitConfirm] = useState(false);
 
+  // Sub-tabs: questionnaires vs history
+  const [activeSubTab, setActiveSubTab] = useState<'qcms' | 'history'>('qcms');
+  const [attempts, setAttempts] = useState<QCMAttempt[]>([]);
+  const [selectedAttemptForInspection, setSelectedAttemptForInspection] = useState<QCMAttempt | null>(null);
+
   // Result / Review Modal state
   const [submissionResult, setSubmissionResult] = useState<QCMSubmission | null>(null);
   const [reviewingQcm, setReviewingQcm] = useState<QCM | null>(null);
@@ -57,8 +66,12 @@ export const StudentQCMSection: React.FC<StudentQCMSectionProps> = ({ classId, t
     try {
       setLoading(true);
       setErrorMessage('');
-      const data = await api.studentGetQCMsStatus(token, classId);
+      const [data, attemptsData] = await Promise.all([
+        api.getStudentQCMsFiltered(token).catch(() => api.studentGetQCMsStatus(token, classId)),
+        api.getStudentQCMAttempts(token).catch(() => [])
+      ]);
       setStatuses(data);
+      setAttempts(attemptsData);
     } catch (err: any) {
       setErrorMessage(err.message || 'Impossible de charger les questionnaires QCM');
     } finally {
@@ -180,6 +193,45 @@ export const StudentQCMSection: React.FC<StudentQCMSectionProps> = ({ classId, t
         </div>
       </div>
 
+      {/* Sub-Tabs: Questionnaires vs Historique des tentatives */}
+      <div className="flex items-center gap-2 p-1.5 bg-slate-100/80 rounded-2xl w-fit">
+        <button
+          type="button"
+          onClick={() => setActiveSubTab('qcms')}
+          className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+            activeSubTab === 'qcms'
+              ? 'bg-white text-indigo-700 shadow-xs'
+              : 'text-slate-600 hover:text-slate-900'
+          }`}
+        >
+          <BookOpen className="w-4 h-4" />
+          <span>Questionnaires QCM</span>
+          <span className={`px-2 py-0.5 rounded-full text-[10px] ${
+            activeSubTab === 'qcms' ? 'bg-indigo-50 text-indigo-700' : 'bg-slate-200 text-slate-600'
+          }`}>
+            {statuses.length}
+          </span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setActiveSubTab('history')}
+          className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+            activeSubTab === 'history'
+              ? 'bg-white text-indigo-700 shadow-xs'
+              : 'text-slate-600 hover:text-slate-900'
+          }`}
+        >
+          <History className="w-4 h-4" />
+          <span>Historique de mes tentatives</span>
+          <span className={`px-2 py-0.5 rounded-full text-[10px] ${
+            activeSubTab === 'history' ? 'bg-indigo-50 text-indigo-700' : 'bg-slate-200 text-slate-600'
+          }`}>
+            {attempts.length}
+          </span>
+        </button>
+      </div>
+
       {errorMessage && (
         <div className="p-4 rounded-2xl bg-rose-50 border border-rose-200 text-rose-800 text-xs font-semibold flex items-center gap-2">
           <AlertCircle className="w-4 h-4 text-rose-600 flex-shrink-0" />
@@ -187,8 +239,129 @@ export const StudentQCMSection: React.FC<StudentQCMSectionProps> = ({ classId, t
         </div>
       )}
 
-      {/* QCM Statuses Grid */}
-      {loading ? (
+      {/* HISTORIQUE DES TENTATIVES TAB */}
+      {activeSubTab === 'history' ? (
+        <div className="bg-white rounded-3xl border border-slate-200 shadow-sm overflow-hidden">
+          <div className="p-5 border-b border-slate-100 flex items-center justify-between gap-4">
+            <div>
+              <h3 className="font-bold text-sm text-slate-900">Journal détaillé de vos tentatives</h3>
+              <p className="text-xs text-slate-500 mt-0.5">
+                Consultez la date, le score, le taux de réussite et les détails de chacun de vos passages.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={loadQCMsStatus}
+              className="p-2 rounded-xl border border-slate-200 hover:bg-slate-50 text-slate-600 text-xs transition-colors cursor-pointer"
+              title="Rafraîchir l'historique"
+            >
+              <RefreshCw className="w-4 h-4" />
+            </button>
+          </div>
+
+          {loading ? (
+            <div className="p-12 text-center text-slate-400">
+              <RefreshCw className="w-6 h-6 animate-spin mx-auto mb-2 text-indigo-600" />
+              <p className="text-xs">Chargement de votre historique...</p>
+            </div>
+          ) : attempts.length === 0 ? (
+            <div className="p-12 text-center text-slate-400">
+              <History className="w-12 h-12 text-slate-300 mx-auto mb-3" />
+              <h4 className="text-sm font-bold text-slate-700">Aucune tentative pour l’instant</h4>
+              <p className="text-xs text-slate-500 mt-1">
+                Lorsque vous répondez à un QCM, vos tentatives et résultats s’afficheront ici.
+              </p>
+            </div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-xs">
+                <thead className="bg-slate-50 text-slate-700 font-semibold border-b border-slate-200">
+                  <tr>
+                    <th className="py-3 px-4">Date & Heure</th>
+                    <th className="py-3 px-4">QCM concerné</th>
+                    <th className="py-3 px-4 text-center">Questions</th>
+                    <th className="py-3 px-4 text-center">Correctes / Incorrectes</th>
+                    <th className="py-3 px-4 text-center">Taux de réussite</th>
+                    <th className="py-3 px-4 text-center">Résultat obtenu</th>
+                    <th className="py-3 px-4 text-center">Durée</th>
+                    <th className="py-3 px-4 text-right">Actions</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {attempts.map((att) => (
+                    <tr key={att.id} className="hover:bg-slate-50/60 transition-colors">
+                      <td className="py-3 px-4 whitespace-nowrap text-slate-600">
+                        <div className="font-semibold text-slate-800">
+                          {new Date(att.completedAt).toLocaleDateString('fr-FR', {
+                            weekday: 'short',
+                            day: 'numeric',
+                            month: 'short',
+                            year: 'numeric'
+                          })}
+                        </div>
+                        <div className="text-[11px] text-slate-400">
+                          {new Date(att.completedAt).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })}
+                        </div>
+                      </td>
+                      <td className="py-3 px-4 font-bold text-slate-900 max-w-xs truncate">
+                        {att.qcmTitle}
+                      </td>
+                      <td className="py-3 px-4 text-center font-semibold text-slate-700">
+                        {att.totalQuestions}
+                      </td>
+                      <td className="py-3 px-4 text-center whitespace-nowrap">
+                        <span className="inline-flex items-center gap-1 font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200 text-[11px]">
+                          ✓ {att.correctCount}
+                        </span>
+                        <span className="mx-1 text-slate-300">/</span>
+                        <span className="inline-flex items-center gap-1 font-bold text-rose-700 bg-rose-50 px-2 py-0.5 rounded border border-rose-200 text-[11px]">
+                          ✗ {att.incorrectCount}
+                        </span>
+                      </td>
+                      <td className="py-3 px-4 text-center">
+                        <span className={`px-2.5 py-0.5 rounded-full text-xs font-bold border ${
+                          att.successRate >= 70
+                            ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
+                            : att.successRate >= 50
+                            ? 'bg-amber-50 text-amber-800 border-amber-200'
+                            : 'bg-rose-50 text-rose-800 border-rose-200'
+                        }`}>
+                          {att.successRate}%
+                        </span>
+                      </td>
+                      <td className="py-3 px-4 text-center font-bold">
+                        <span className={`px-3 py-1 rounded-xl text-xs font-black border ${
+                          att.score20 >= 10
+                            ? 'bg-emerald-50 text-emerald-800 border-emerald-300'
+                            : 'bg-rose-50 text-rose-800 border-rose-300'
+                        }`}>
+                          {att.score20} / 20
+                        </span>
+                        <div className="text-[10px] text-slate-400 mt-0.5">
+                          {att.totalScore} / {att.maxScore} pts
+                        </div>
+                      </td>
+                      <td className="py-3 px-4 text-center text-slate-500 whitespace-nowrap">
+                        {Math.floor(att.timeSpentSeconds / 60)}m {att.timeSpentSeconds % 60}s
+                      </td>
+                      <td className="py-3 px-4 text-right">
+                        <button
+                          type="button"
+                          onClick={() => setSelectedAttemptForInspection(att)}
+                          className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 rounded-xl text-xs font-bold transition-colors cursor-pointer"
+                        >
+                          <Eye className="w-3.5 h-3.5" />
+                          <span>Détails</span>
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      ) : loading ? (
         <div className="p-12 text-center text-slate-400">
           <RefreshCw className="w-6 h-6 animate-spin mx-auto mb-2 text-indigo-600" />
           <p className="text-xs">Chargement de vos QCM...</p>
@@ -700,6 +873,123 @@ export const StudentQCMSection: React.FC<StudentQCMSectionProps> = ({ classId, t
                 className="px-5 py-2.5 bg-slate-900 hover:bg-slate-800 text-white rounded-xl text-xs font-bold cursor-pointer"
               >
                 Terminer et fermer
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ========================================================================= */}
+      {/* MODAL: HISTORIQUE ATTEMPT INSPECTION                                      */}
+      {/* ========================================================================= */}
+      {selectedAttemptForInspection && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/80 backdrop-blur-md p-4 overflow-y-auto">
+          <div className="bg-white rounded-3xl shadow-2xl max-w-xl w-full border border-slate-200 overflow-hidden my-6 flex flex-col relative animate-in fade-in zoom-in-95 duration-200">
+            {/* Header */}
+            <div className="p-6 bg-slate-900 text-white flex items-center justify-between">
+              <div>
+                <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-indigo-500/20 text-indigo-300 border border-indigo-400/30">
+                  Détail de la tentative
+                </span>
+                <h3 className="text-base font-bold mt-1">{selectedAttemptForInspection.qcmTitle}</h3>
+                <p className="text-xs text-slate-400">
+                  Passé le {new Date(selectedAttemptForInspection.completedAt).toLocaleDateString('fr-FR', {
+                    weekday: 'long',
+                    day: 'numeric',
+                    month: 'long',
+                    year: 'numeric'
+                  })} à {new Date(selectedAttemptForInspection.completedAt).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })}
+                </p>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => setSelectedAttemptForInspection(null)}
+                className="w-8 h-8 rounded-full bg-slate-800 hover:bg-slate-700 text-slate-300 flex items-center justify-center cursor-pointer transition-colors"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Score Summary Banner */}
+            <div className="p-4 bg-slate-50 border-b border-slate-200 grid grid-cols-3 gap-2 text-center text-xs">
+              <div className="p-2.5 rounded-xl bg-white border border-slate-200 shadow-xs">
+                <span className="text-[10px] text-slate-400 block font-semibold">Note obtenue</span>
+                <strong className={`text-base font-black ${
+                  selectedAttemptForInspection.score20 >= 10 ? 'text-emerald-600' : 'text-rose-600'
+                }`}>
+                  {selectedAttemptForInspection.score20} / 20
+                </strong>
+              </div>
+
+              <div className="p-2.5 rounded-xl bg-white border border-slate-200 shadow-xs">
+                <span className="text-[10px] text-slate-400 block font-semibold">Taux de réussite</span>
+                <strong className="text-base font-black text-indigo-600">
+                  {selectedAttemptForInspection.successRate}%
+                </strong>
+              </div>
+
+              <div className="p-2.5 rounded-xl bg-white border border-slate-200 shadow-xs">
+                <span className="text-[10px] text-slate-400 block font-semibold">Bonnes réponses</span>
+                <strong className="text-base font-black text-slate-800">
+                  {selectedAttemptForInspection.correctCount} / {selectedAttemptForInspection.totalQuestions}
+                </strong>
+              </div>
+            </div>
+
+            {/* Answers Detail Breakdown */}
+            <div className="p-6 overflow-y-auto max-h-[50vh] space-y-3">
+              <h4 className="text-xs font-bold text-slate-700">Détail des questions enregistrées :</h4>
+              {selectedAttemptForInspection.answersJson ? (
+                (() => {
+                  try {
+                    const raw = selectedAttemptForInspection.answersJson as any;
+                    const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
+                    const entries = Object.entries(parsed || {});
+                    if (entries.length === 0) {
+                      return <p className="text-xs text-slate-400">Aucun détail supplémentaire disponible.</p>;
+                    }
+                    return (
+                      <div className="space-y-2">
+                        {entries.map(([qId, val]: [string, any], idx) => (
+                          <div
+                            key={qId}
+                            className={`p-3 rounded-xl border text-xs flex items-center justify-between ${
+                              val.isCorrect
+                                ? 'bg-emerald-50/50 border-emerald-200 text-emerald-900'
+                                : 'bg-rose-50/50 border-rose-200 text-rose-900'
+                            }`}
+                          >
+                            <span className="font-semibold">Question #{idx + 1}</span>
+                            <div className="flex items-center gap-3">
+                              <span>Réponse choisie : <strong>Option {val.chosen || 'Non répondu'}</strong></span>
+                              <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                                val.isCorrect ? 'bg-emerald-200 text-emerald-900' : 'bg-rose-200 text-rose-900'
+                              }`}>
+                                {val.isCorrect ? `+${val.pointsEarned ?? 1} pts (Correct)` : 'Incorrect'}
+                              </span>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    );
+                  } catch {
+                    return <p className="text-xs text-slate-400">Détail non disponible.</p>;
+                  }
+                })()
+              ) : (
+                <p className="text-xs text-slate-400">Aucun détail de question disponible pour cette tentative.</p>
+              )}
+            </div>
+
+            {/* Footer */}
+            <div className="p-4 bg-slate-50 border-t border-slate-200 flex justify-end">
+              <button
+                type="button"
+                onClick={() => setSelectedAttemptForInspection(null)}
+                className="px-5 py-2 bg-slate-900 hover:bg-slate-800 text-white rounded-xl text-xs font-bold cursor-pointer"
+              >
+                Fermer
               </button>
             </div>
           </div>

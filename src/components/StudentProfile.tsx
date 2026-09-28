@@ -21,13 +21,15 @@ import {
   Download,
   Trash2,
   FileCode,
-  FileText
+  FileText,
+  FileCheck
 } from 'lucide-react';
 import { Student, StudentTodayAttendance } from '../types';
 import { api } from '../api';
 import { CoursesSection } from './CoursesSection';
 import { StudentTestsSection } from './StudentTestsSection';
 import { StudentQCMSection } from './StudentQCMSection';
+import { StudentEducationalSection } from './StudentEducationalSection';
 
 interface StudentProfileProps {
   student: Student;
@@ -41,7 +43,7 @@ export const StudentProfile: React.FC<StudentProfileProps> = ({
   token,
   onLogout
 }) => {
-  const [activeTab, setActiveTab] = useState<'tests' | 'courses' | 'qcms' | 'profile'>('tests');
+  const [activeTab, setActiveTab] = useState<'courses' | 'exercices' | 'examens' | 'tests' | 'qcms' | 'profile'>('courses');
   const [todayAttendance, setTodayAttendance] = useState<StudentTodayAttendance | null>(null);
   const [loadingAttendance, setLoadingAttendance] = useState<boolean>(true);
   const [isMarking, setIsMarking] = useState<boolean>(false);
@@ -292,21 +294,6 @@ export const StudentProfile: React.FC<StudentProfileProps> = ({
           {/* Navigation Rubriques Tabs */}
           <div className="flex items-center gap-2 mt-6 pt-4 border-t border-slate-100 overflow-x-auto">
             <button
-              onClick={() => setActiveTab('tests')}
-              className={`px-4 py-2.5 rounded-xl text-xs font-bold flex items-center gap-2 transition-all cursor-pointer whitespace-nowrap ${
-                activeTab === 'tests'
-                  ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/20'
-                  : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
-              }`}
-            >
-              <Keyboard className="w-4 h-4" />
-              <span>Tests de Frappe Clavier</span>
-              <span className={`px-1.5 py-0.5 rounded-full text-[10px] ${activeTab === 'tests' ? 'bg-indigo-800 text-white' : 'bg-slate-200 text-slate-700'}`}>
-                Évaluations
-              </span>
-            </button>
-
-            <button
               onClick={() => setActiveTab('courses')}
               className={`px-4 py-2.5 rounded-xl text-xs font-bold flex items-center gap-2 transition-all cursor-pointer whitespace-nowrap ${
                 activeTab === 'courses'
@@ -315,7 +302,48 @@ export const StudentProfile: React.FC<StudentProfileProps> = ({
               }`}
             >
               <BookOpen className="w-4 h-4" />
-              <span>Rubrique Cours & Documents</span>
+              <span>Cours</span>
+            </button>
+
+            <button
+              onClick={() => setActiveTab('exercices')}
+              className={`px-4 py-2.5 rounded-xl text-xs font-bold flex items-center gap-2 transition-all cursor-pointer whitespace-nowrap ${
+                activeTab === 'exercices'
+                  ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/20'
+                  : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+              }`}
+            >
+              <FileText className="w-4 h-4" />
+              <span>Exercices</span>
+            </button>
+
+            <button
+              onClick={() => setActiveTab('examens')}
+              className={`px-4 py-2.5 rounded-xl text-xs font-bold flex items-center gap-2 transition-all cursor-pointer whitespace-nowrap ${
+                activeTab === 'examens'
+                  ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/20'
+                  : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+              }`}
+            >
+              <FileCheck className="w-4 h-4" />
+              <span>Examens</span>
+              <span className={`px-1.5 py-0.5 rounded-full text-[10px] ${
+                activeTab === 'examens' ? 'bg-indigo-800 text-white' : 'bg-slate-200 text-slate-700'
+              }`}>
+                Fichiers
+              </span>
+            </button>
+
+            <button
+              onClick={() => setActiveTab('tests')}
+              className={`px-4 py-2.5 rounded-xl text-xs font-bold flex items-center gap-2 transition-all cursor-pointer whitespace-nowrap ${
+                activeTab === 'tests'
+                  ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/20'
+                  : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+              }`}
+            >
+              <Keyboard className="w-4 h-4" />
+              <span>Tests de Frappe</span>
             </button>
 
             <button
@@ -328,7 +356,7 @@ export const StudentProfile: React.FC<StudentProfileProps> = ({
               }`}
             >
               <HelpCircle className="w-4 h-4" />
-              <span>Questionnaires QCM</span>
+              <span>QCM & Quiz</span>
             </button>
 
             <button
@@ -340,7 +368,7 @@ export const StudentProfile: React.FC<StudentProfileProps> = ({
               }`}
             >
               <User className="w-4 h-4" />
-              <span>Mon Profil & Compte</span>
+              <span>Mon Profil</span>
             </button>
           </div>
         </div>
@@ -518,12 +546,38 @@ export const StudentProfile: React.FC<StudentProfileProps> = ({
       </div>
 
       {/* Main Tab Views */}
-      {activeTab === 'tests' && (
-        <StudentTestsSection classId={student.classId} token={token} />
+      {activeTab === 'courses' && (
+        <StudentEducationalSection
+          resourceType="cours"
+          token={token}
+          studentLevel={student.educationalLevel || student.level}
+          studentSection={student.section}
+          className={student.className}
+        />
       )}
 
-      {activeTab === 'courses' && (
-        <CoursesSection classId={student.classId} token={token} isTeacher={false} />
+      {activeTab === 'exercices' && (
+        <StudentEducationalSection
+          resourceType="exercice"
+          token={token}
+          studentLevel={student.educationalLevel || student.level}
+          studentSection={student.section}
+          className={student.className}
+        />
+      )}
+
+      {activeTab === 'examens' && (
+        <StudentEducationalSection
+          resourceType="examen"
+          token={token}
+          studentLevel={student.educationalLevel || student.level}
+          studentSection={student.section}
+          className={student.className}
+        />
+      )}
+
+      {activeTab === 'tests' && (
+        <StudentTestsSection classId={student.classId} token={token} />
       )}
 
       {activeTab === 'qcms' && (

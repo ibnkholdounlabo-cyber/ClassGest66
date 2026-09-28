@@ -1,7 +1,21 @@
+export type EducationalLevel = '1' | '2' | '3' | '4';
+export type EducationalSection = 'Lettres' | 'Économie' | 'Sciences' | 'Technique' | 'Mathématiques' | 'Commun' | 'Informatique';
+export type ResourceType = 'cours' | 'exercice' | 'examen';
+
+export interface AttachedFile {
+  id: string;
+  name: string;
+  url: string;
+  size?: number;
+  type?: string;
+  uploadedAt?: string;
+}
+
 export interface ClassGroup {
   id: string;
   name: string;
-  level: string;
+  level: string; // '1' | '2' | '3' | '4' or descriptive string
+  section?: string; // 'Lettres' | 'Économie' | 'Sciences' | 'Technique' | 'Mathématiques' | 'Commun' | 'Informatique'
   academicYear: string;
   room?: string;
   description?: string;
@@ -13,6 +27,8 @@ export interface Student {
   classId: string;
   className?: string;
   level?: string;
+  educationalLevel?: string;
+  section?: string;
   academicYear?: string;
   room?: string;
   firstName: string;
@@ -89,6 +105,10 @@ export interface Course {
   fileName?: string;
   fileType?: string;
   fileSize?: number;
+  resourceType?: ResourceType; // 'cours' | 'exercice' | 'examen'
+  level?: string; // '1' | '2' | '3' | '4'
+  section?: string; // 'Lettres' | 'Économie' | 'Sciences' | 'Technique' | 'Mathématiques' | 'Commun' | 'Informatique'
+  attachedFiles?: AttachedFile[];
   createdAt: string;
 }
 
@@ -99,6 +119,8 @@ export interface TypingTest {
   title: string;
   theme: 'Word' | 'Excel' | 'Python' | 'Général';
   level: number;
+  educationalLevel?: string; // '1' | '2' | '3' | '4'
+  section?: string;
   timeLimitSeconds: number;
   targetText: string;
   minAccuracyPercent: number;
@@ -174,10 +196,61 @@ export interface QCM {
   durationMinutes: number; // 0 = non chronométré
   totalPoints: number;
   isActive: boolean;
+  level?: string; // '1' | '2' | '3' | '4'
+  section?: string; // 'Lettres' | 'Économie' | 'Sciences' | 'Technique' | 'Mathématiques' | 'Commun' | 'Informatique'
   createdAt: string;
   questionCount?: number;
   submissionsCount?: number;
   questions?: QCMQuestion[];
+}
+
+export interface QCMAttempt {
+  id: string;
+  qcmId: string;
+  qcmTitle: string;
+  studentId: string;
+  studentName?: string;
+  classId: string;
+  className?: string;
+  level?: string;
+  section?: string;
+  totalQuestions: number;
+  correctCount: number;
+  incorrectCount: number;
+  successRate: number; // % (0 - 100)
+  totalScore: number;
+  maxScore: number;
+  score20: number; // Note sur 20
+  timeSpentSeconds: number;
+  completedAt: string; // ISO date-time
+  answersJson?: Record<string, { chosen: 'A' | 'B' | 'C' | 'D' | ''; isCorrect: boolean; pointsEarned: number }>;
+}
+
+export interface QCMQuestionAnalysis {
+  questionId: string;
+  questionOrder: number;
+  questionText: string;
+  qcmId: string;
+  qcmTitle: string;
+  category?: string;
+  level?: string;
+  section?: string;
+  totalAnswers: number;
+  correctAnswers: number;
+  incorrectAnswers: number;
+  successRate: number; // %
+  failureRate: number; // %
+  difficultyLevel: 'facile' | 'moyen' | 'difficile';
+  optionCounts?: Record<string, number>;
+}
+
+export interface QCMGlobalStats {
+  totalAttempts: number;
+  averageScore20: number;
+  averageSuccessRate: number;
+  totalQcms: number;
+  questionsAnalysis: QCMQuestionAnalysis[];
+  attempts: QCMAttempt[];
 }
 
 export interface QCMSubmission {
@@ -192,6 +265,7 @@ export interface QCMSubmission {
   timeSpentSeconds: number;
   completedAt: string;
   studentName?: string;
+  studentNumber?: string;
   qcmTitle?: string;
   isPractice?: boolean;
   officialScore20?: number;
@@ -276,6 +350,13 @@ export interface AttendanceSession {
   lateCount?: number;
   excusedCount?: number;
   records?: AttendanceRecord[];
+  qcmStats?: {
+    totalAttempts: number;
+    averageScore20: number;
+    successRate: number;
+    passedCount: number;
+    attempts: QCMAttempt[];
+  };
 }
 
 export interface StudentAttendanceSummary {
@@ -366,5 +447,112 @@ export interface ClassDisciplineStats {
     positiveCount: number;
     lastObservation?: string;
   }>;
+}
+
+export interface StudentSessionHistoryItem {
+  sessionId: string;
+  sessionTitle: string;
+  sessionDate: string;
+  startTime?: string;
+  endTime?: string;
+  status: 'present' | 'absent' | 'late' | 'excused';
+  notes?: string;
+  activityFileUrl?: string;
+  activityFileName?: string;
+  activityFileType?: string;
+  activityFileSize?: number;
+  activityUploadedAt?: string;
+}
+
+export interface StudentTypingHistoryItem {
+  testId: string;
+  testTitle: string;
+  score: number;
+  wpm: number;
+  cpm: number;
+  accuracy: number;
+  mistakesCount: number;
+  passed: boolean;
+  completedAt: string;
+}
+
+export interface StudentQCMHistoryItem {
+  qcmId: string;
+  qcmTitle: string;
+  score20: number;
+  totalScore: number;
+  maxScore: number;
+  timeSpentSeconds: number;
+  completedAt: string;
+}
+
+export interface StudentFinalReport {
+  studentId: string;
+  firstName: string;
+  lastName: string;
+  studentNumber: string;
+  isRepeating: boolean;
+  // Frappe (Typing)
+  typingTestsCount: number;
+  typingAverageScore: number;
+  typingAverageWpm: number;
+  typingAverageAccuracy: number;
+  typingTotalScore: number;
+  typingHistory: StudentTypingHistoryItem[];
+  // QCM
+  qcmCount: number;
+  qcmAverageScore20: number;
+  qcmTotalScore: number;
+  qcmHistory: StudentQCMHistoryItem[];
+  // Total & Combined
+  totalCombinedScore: number;
+  overallAverage20: number;
+  // Séances & Attendance
+  sessionsCount: number;
+  presentCount: number;
+  absentCount: number;
+  lateCount: number;
+  excusedCount: number;
+  attendanceRate: number;
+  attachedFilesCount: number;
+  attachedFiles: Array<{
+    fileName: string;
+    fileUrl: string;
+    fileSize: number;
+    fileType: string;
+    uploadedAt: string;
+    sessionTitle: string;
+    sessionDate: string;
+  }>;
+  sessionsHistory: StudentSessionHistoryItem[];
+}
+
+export interface TrimesterFinalReport {
+  trimester: number; // 0 for all/annual, 1, 2, 3
+  name: string; // e.g. "Trimestre 1 (Sep - Déc)"
+  period: string;
+  totalSessions: number;
+  totalTypingTests: number;
+  totalQcms: number;
+  classAverageTypingScore: number;
+  classAverageWpm: number;
+  classAverageAccuracy: number;
+  classAverageQCMScore: number;
+  classAverageTotalScore: number;
+  classAverageOverall20: number;
+  classAttendanceRate: number;
+  totalAttachedFilesCount: number;
+  studentReports: StudentFinalReport[];
+}
+
+export interface ClassFinalReport {
+  classInfo: ClassGroup;
+  generatedAt: string;
+  trimesters: {
+    annual: TrimesterFinalReport;
+    t1: TrimesterFinalReport;
+    t2: TrimesterFinalReport;
+    t3: TrimesterFinalReport;
+  };
 }
 

@@ -42,7 +42,7 @@ export const StudentTestsSection: React.FC<StudentTestsSectionProps> = ({
     setLoading(true);
     setError(null);
     try {
-      const data = await api.getStudentTestsProgress(token, classId);
+      const data = await api.getStudentTestsFiltered(token).catch(() => api.getStudentTestsProgress(token, classId));
       setTestStatuses(data);
     } catch (err: any) {
       setError(err.message || 'Impossible de charger vos tests de frappe');

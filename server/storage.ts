@@ -6,6 +6,8 @@ import {
   Student,
   TeacherUser,
   Course,
+  ResourceType,
+  AttachedFile,
   TypingTest,
   TestEvaluation,
   StudentTestStatus,
@@ -15,11 +17,20 @@ import {
   QCMSubmission,
   StudentQCMStatus,
   QCMEvaluationSummary,
+  QCMAttempt,
+  QCMQuestionAnalysis,
+  QCMGlobalStats,
   AttendanceStatus,
   AttendanceRecord,
   AttendanceSession,
   StudentAttendanceSummary,
-  ClassDisciplineStats
+  ClassDisciplineStats,
+  ClassFinalReport,
+  TrimesterFinalReport,
+  StudentFinalReport,
+  StudentSessionHistoryItem,
+  StudentTypingHistoryItem,
+  StudentQCMHistoryItem
 } from '../src/types.js';
 import { generateSimplePassword } from './password.js';
 import { parseQcmImportText } from '../src/utils/qcmParser.js';
@@ -55,20 +66,22 @@ const INITIAL_DATA: DatabaseSchema = {
   classes: [
     {
       id: 'cls-6b',
-      name: '6ème B',
-      level: 'Sixième - Collège',
+      name: '1ère Année B',
+      level: '1',
+      section: 'Commun',
       academicYear: '2024-2025',
       room: 'Salle 104',
-      description: 'Classe de 6ème B - Groupe Principal',
+      description: 'Classe de 1ère Année - Troncs Communs',
       createdAt: new Date().toISOString()
     },
     {
       id: 'cls-3a',
-      name: '3ème A',
-      level: 'Troisième - Collège',
+      name: '3ème Sciences 1',
+      level: '3',
+      section: 'Sciences',
       academicYear: '2024-2025',
       room: 'Salle 208',
-      description: 'Classe de 3ème A - Préparation Brevet',
+      description: 'Classe de 3ème Année Sciences',
       createdAt: new Date().toISOString()
     }
   ],
@@ -498,6 +511,77 @@ class SQLiteStorage {
       this.db.exec("ALTER TABLE attendance_records ADD COLUMN activityUploadedAt TEXT DEFAULT '';");
     } catch {}
 
+    // Migrations Pédagogiques : Niveaux & Sections (1..4 / Lettres, Économie, Sciences, Technique, Mathématiques, Commun, Informatique)
+    try {
+      this.db.exec("ALTER TABLE classes ADD COLUMN section TEXT DEFAULT 'Commun';");
+    } catch {}
+    try {
+      this.db.exec("ALTER TABLE courses ADD COLUMN resourceType TEXT NOT NULL DEFAULT 'cours';");
+    } catch {}
+    try {
+      this.db.exec("ALTER TABLE courses ADD COLUMN level TEXT DEFAULT '1';");
+    } catch {}
+    try {
+      this.db.exec("ALTER TABLE courses ADD COLUMN section TEXT DEFAULT 'Commun';");
+    } catch {}
+    try {
+      this.db.exec("ALTER TABLE courses ADD COLUMN filesJson TEXT DEFAULT '[]';");
+    } catch {}
+    try {
+      this.db.exec("ALTER TABLE tests ADD COLUMN educationalLevel TEXT DEFAULT '1';");
+    } catch {}
+    try {
+      this.db.exec("ALTER TABLE tests ADD COLUMN section TEXT DEFAULT 'Commun';");
+    } catch {}
+    try {
+      this.db.exec("ALTER TABLE qcms ADD COLUMN level TEXT DEFAULT '1';");
+    } catch {}
+    try {
+      this.db.exec("ALTER TABLE qcms ADD COLUMN section TEXT DEFAULT 'Commun';");
+    } catch {}
+
+    // Table Historique des Tentatives de QCM
+    try {
+      this.db.exec(`
+        CREATE TABLE IF NOT EXISTS qcm_attempts (
+          id TEXT PRIMARY KEY,
+          qcmId TEXT NOT NULL,
+          studentId TEXT NOT NULL,
+          classId TEXT NOT NULL,
+          totalQuestions INTEGER NOT NULL,
+          correctCount INTEGER NOT NULL,
+          incorrectCount INTEGER NOT NULL,
+          successRate REAL NOT NULL,
+          totalScore REAL NOT NULL,
+          maxScore REAL NOT NULL,
+          score20 REAL NOT NULL,
+          timeSpentSeconds INTEGER NOT NULL DEFAULT 0,
+          completedAt TEXT NOT NULL,
+          answersJson TEXT NOT NULL,
+          FOREIGN KEY (qcmId) REFERENCES qcms(id) ON DELETE CASCADE,
+          FOREIGN KEY (studentId) REFERENCES students(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_qcm_attempts_studentId ON qcm_attempts(studentId);
+        CREATE INDEX IF NOT EXISTS idx_qcm_attempts_qcmId ON qcm_attempts(qcmId);
+        CREATE INDEX IF NOT EXISTS idx_qcm_attempts_classId ON qcm_attempts(classId);
+      `);
+    } catch (attErr) {
+      console.warn('Table qcm_attempts:', attErr);
+    }
+
+    // Normalisation des niveaux et sections pour classes existantes
+    try {
+      this.db.exec(`
+        UPDATE classes SET level = '1', section = 'Commun' WHERE level LIKE '%Six%' OR level LIKE '%6%';
+        UPDATE classes SET level = '3', section = 'Sciences' WHERE level LIKE '%Trois%' OR level LIKE '%3%';
+        UPDATE classes SET section = 'Commun' WHERE section IS NULL OR section = '';
+        UPDATE courses SET level = '1', section = 'Commun' WHERE level IS NULL OR level = '';
+        UPDATE courses SET resourceType = 'cours' WHERE resourceType IS NULL OR resourceType = '';
+        UPDATE tests SET educationalLevel = '1', section = 'Commun' WHERE educationalLevel IS NULL OR educationalLevel = '';
+        UPDATE qcms SET level = '1', section = 'Commun' WHERE level IS NULL OR level = '';
+      `);
+    } catch {}
+
     // Vérification : uniquement si la base de données est complètement vierge (0 classe)
     // Cela garantit qu'un redémarrage ou un nouveau déploiement Git ne modifie JAMAIS vos données existantes !
     const classCountRow = this.db.prepare('SELECT COUNT(*) as count FROM classes').get() as { count: number };
@@ -882,7 +966,8 @@ for m in matieres:
       notes: row.notes ? String(row.notes) : '',
       lastLogin: row.lastLogin ? String(row.lastLogin) : undefined,
       createdAt: String(row.createdAt),
-      level: row.level ? String(row.level) : undefined,
+      level: row.level ? String(row.level) : (row.classLevel ? String(row.classLevel) : '1'),
+      section: row.section ? String(row.section) : (row.classSection ? String(row.classSection) : 'Commun'),
       academicYear: row.academicYear ? String(row.academicYear) : undefined,
       room: row.room ? String(row.room) : undefined
     };
@@ -893,8 +978,9 @@ for m in matieres:
     return {
       id: String(row.id),
       name: String(row.name),
-      level: String(row.level),
-      academicYear: String(row.academicYear),
+      level: row.level ? String(row.level) : '1',
+      section: row.section ? String(row.section) : 'Commun',
+      academicYear: String(row.academicYear || '2024-2025'),
       room: row.room ? String(row.room) : '',
       description: row.description ? String(row.description) : '',
       createdAt: String(row.createdAt)
@@ -924,11 +1010,12 @@ for m in matieres:
     return row ? this.mapClassRow(row) : undefined;
   }
 
-  public createClass(name: string, level: string, academicYear: string, room?: string, description?: string): ClassGroup {
+  public createClass(name: string, level: string, academicYear: string, room?: string, description?: string, section?: string): ClassGroup {
     const newClass: ClassGroup = {
       id: 'cls-' + Date.now().toString(36) + Math.random().toString(36).substring(2, 5),
       name: name.trim(),
-      level: level.trim() || 'Général',
+      level: level.trim() || '1',
+      section: section?.trim() || 'Commun',
       academicYear: academicYear.trim() || '2024-2025',
       room: room?.trim() || '',
       description: description?.trim() || '',
@@ -936,12 +1023,13 @@ for m in matieres:
     };
 
     this.db.prepare(`
-      INSERT INTO classes (id, name, level, academicYear, room, description, createdAt)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO classes (id, name, level, section, academicYear, room, description, createdAt)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       newClass.id,
       newClass.name,
       newClass.level,
+      newClass.section || 'Commun',
       newClass.academicYear,
       newClass.room || '',
       newClass.description || '',
@@ -953,6 +1041,25 @@ for m in matieres:
     this.createDefaultTestsForClass(newClass.id);
 
     return newClass;
+  }
+
+  public updateClass(id: string, data: Partial<ClassGroup>): ClassGroup {
+    const existing = this.getClassById(id);
+    if (!existing) throw new Error('Classe introuvable');
+    const name = data.name !== undefined ? data.name.trim() : existing.name;
+    const level = data.level !== undefined ? data.level.trim() : existing.level;
+    const section = data.section !== undefined ? data.section.trim() : (existing.section || 'Commun');
+    const academicYear = data.academicYear !== undefined ? data.academicYear.trim() : existing.academicYear;
+    const room = data.room !== undefined ? data.room.trim() : (existing.room || '');
+    const description = data.description !== undefined ? data.description.trim() : (existing.description || '');
+
+    this.db.prepare(`
+      UPDATE classes
+      SET name = ?, level = ?, section = ?, academicYear = ?, room = ?, description = ?
+      WHERE id = ?
+    `).run(name, level, section, academicYear, room, description, id);
+
+    return this.getClassById(id)!;
   }
 
   public deleteClass(id: string): boolean {
@@ -969,7 +1076,7 @@ for m in matieres:
   // ==========================================
   public getStudentsByClass(classId: string, includePassword = false): Student[] {
     const rows = this.db.prepare(`
-      SELECT s.*, c.name as className
+      SELECT s.*, c.name as className, c.level as classLevel, c.section as classSection, c.academicYear, c.room
       FROM students s
       JOIN classes c ON c.id = s.classId
       WHERE s.classId = ?
@@ -1191,7 +1298,7 @@ for m in matieres:
   }
 
   // ==========================================
-  // COURSES
+  // COURSES & EDUCATIONAL RESOURCES (Cours, Exercices, Examens)
   // ==========================================
   private getCourseClasses(courseId: string): string[] {
     try {
@@ -1202,40 +1309,30 @@ for m in matieres:
     }
   }
 
-  public getCoursesByClass(classId: string): Course[] {
-    const rows = this.db.prepare(`
-      SELECT DISTINCT c.* FROM courses c
-      LEFT JOIN course_classes cc ON cc.courseId = c.id
-      WHERE c.classId = ? OR cc.classId = ?
-      ORDER BY c.createdAt DESC
-    `).all(classId, classId) as any[];
-
-    return rows.map((r) => {
-      const linkedClasses = this.getCourseClasses(String(r.id));
-      const classIds = linkedClasses.length > 0 ? linkedClasses : [String(r.classId)];
-      return {
-        id: String(r.id),
-        classId: String(r.classId),
-        classIds,
-        title: String(r.title),
-        category: r.category as any,
-        description: r.description ? String(r.description) : '',
-        content: String(r.content),
-        resourceLink: r.resourceLink ? String(r.resourceLink) : '',
-        fileUrl: r.fileUrl ? String(r.fileUrl) : undefined,
-        fileName: r.fileName ? String(r.fileName) : undefined,
-        fileType: r.fileType ? String(r.fileType) : undefined,
-        fileSize: r.fileSize ? Number(r.fileSize) : undefined,
-        createdAt: String(r.createdAt)
-      };
-    });
-  }
-
-  public getCourseById(courseId: string): Course | undefined {
-    const r = this.db.prepare('SELECT * FROM courses WHERE id = ?').get(courseId) as any;
-    if (!r) return undefined;
+  private mapCourseRow(r: any): Course {
     const linkedClasses = this.getCourseClasses(String(r.id));
-    const classIds = linkedClasses.length > 0 ? linkedClasses : [String(r.classId)];
+    const classIds = linkedClasses.length > 0 ? linkedClasses : (r.classId ? [String(r.classId)] : []);
+
+    let attachedFiles: AttachedFile[] = [];
+    if (r.filesJson) {
+      try {
+        const parsed = JSON.parse(r.filesJson);
+        if (Array.isArray(parsed)) {
+          attachedFiles = parsed;
+        }
+      } catch {}
+    }
+    if (attachedFiles.length === 0 && r.fileUrl) {
+      attachedFiles = [{
+        id: 'file-primary',
+        name: r.fileName || 'Fichier joint',
+        url: r.fileUrl,
+        size: r.fileSize ? Number(r.fileSize) : undefined,
+        type: r.fileType || 'application/octet-stream',
+        uploadedAt: String(r.createdAt)
+      }];
+    }
+
     return {
       id: String(r.id),
       classId: String(r.classId),
@@ -1249,8 +1346,104 @@ for m in matieres:
       fileName: r.fileName ? String(r.fileName) : undefined,
       fileType: r.fileType ? String(r.fileType) : undefined,
       fileSize: r.fileSize ? Number(r.fileSize) : undefined,
+      resourceType: (r.resourceType as any) || 'cours',
+      level: r.level ? String(r.level) : '1',
+      section: r.section ? String(r.section) : 'Commun',
+      attachedFiles,
       createdAt: String(r.createdAt)
     };
+  }
+
+  public getCoursesByClass(classId: string, resourceType?: ResourceType): Course[] {
+    const isAll = classId === 'all' || !classId;
+    let query = `
+      SELECT DISTINCT c.* FROM courses c
+      LEFT JOIN course_classes cc ON cc.courseId = c.id
+      WHERE 1=1
+    `;
+    const params: any[] = [];
+    if (!isAll) {
+      query += ' AND (c.classId = ? OR cc.classId = ?)';
+      params.push(classId, classId);
+    }
+    if (resourceType) {
+      query += ' AND c.resourceType = ?';
+      params.push(resourceType);
+    }
+    query += ' ORDER BY c.createdAt DESC';
+
+    const rows = this.db.prepare(query).all(...params) as any[];
+    return rows.map((r) => this.mapCourseRow(r));
+  }
+
+  public getEducationalResources(options: {
+    resourceType?: ResourceType;
+    level?: string;
+    section?: string;
+    classId?: string;
+  }): Course[] {
+    let query = `
+      SELECT DISTINCT c.* FROM courses c
+      LEFT JOIN course_classes cc ON cc.courseId = c.id
+      WHERE 1=1
+    `;
+    const params: any[] = [];
+
+    if (options.resourceType && options.resourceType !== ('all' as any)) {
+      query += ' AND c.resourceType = ?';
+      params.push(options.resourceType);
+    }
+    if (options.level && options.level !== 'all') {
+      query += ' AND c.level = ?';
+      params.push(options.level);
+    }
+    if (options.section && options.section !== 'all') {
+      query += ' AND c.section = ?';
+      params.push(options.section);
+    }
+    if (options.classId && options.classId !== 'all') {
+      query += ' AND (c.classId = ? OR cc.classId = ?)';
+      params.push(options.classId, options.classId);
+    }
+    query += ' ORDER BY c.createdAt DESC';
+
+    const rows = this.db.prepare(query).all(...params) as any[];
+    return rows.map(r => this.mapCourseRow(r));
+  }
+
+  public getStudentEducationalResources(studentId: string, resourceType?: ResourceType): Course[] {
+    const student = this.getStudentById(studentId);
+    if (!student) return [];
+
+    const studentClass = this.getClassById(student.classId);
+    const studentLevel = studentClass?.level || student.level || '1';
+    const studentSection = studentClass?.section || student.section || 'Commun';
+
+    let query = `
+      SELECT DISTINCT c.* FROM courses c
+      LEFT JOIN course_classes cc ON cc.courseId = c.id
+      WHERE (
+        cc.classId = ?
+        OR c.classId = ?
+        OR (c.level = ? AND (c.section = ? OR c.section = 'Commun'))
+      )
+    `;
+    const params: any[] = [student.classId, student.classId, studentLevel, studentSection];
+
+    if (resourceType) {
+      query += ' AND c.resourceType = ?';
+      params.push(resourceType);
+    }
+    query += ' ORDER BY c.createdAt DESC';
+
+    const rows = this.db.prepare(query).all(...params) as any[];
+    return rows.map(r => this.mapCourseRow(r));
+  }
+
+  public getCourseById(courseId: string): Course | undefined {
+    const r = this.db.prepare('SELECT * FROM courses WHERE id = ?').get(courseId) as any;
+    if (!r) return undefined;
+    return this.mapCourseRow(r);
   }
 
   public createCourse(classId: string, data: {
@@ -1263,72 +1456,113 @@ for m in matieres:
     fileName?: string;
     fileType?: string;
     fileSize?: number;
+    resourceType?: ResourceType;
+    level?: string;
+    section?: string;
+    attachedFiles?: AttachedFile[];
     classIds?: string[];
   }): Course {
-    const id = 'crs-' + Date.now().toString(36) + Math.random().toString(36).substring(2, 5);
+    const id = (data.resourceType === 'examen' ? 'exm-' : data.resourceType === 'exercice' ? 'exo-' : 'crs-') +
+      Date.now().toString(36) + Math.random().toString(36).substring(2, 5);
     const createdAt = new Date().toISOString();
 
     const targetClasses = (Array.isArray(data.classIds) && data.classIds.length > 0)
       ? Array.from(new Set(data.classIds))
-      : [classId];
+      : (classId && classId !== 'all' ? [classId] : []);
 
-    const primaryClassId = targetClasses[0] || classId;
+    const primaryClassId = targetClasses[0] || (classId && classId !== 'all' ? classId : 'all');
+    const resourceType = data.resourceType || 'cours';
+    const level = data.level || '1';
+    const section = data.section || 'Commun';
+
+    let attachedFiles: AttachedFile[] = Array.isArray(data.attachedFiles) ? data.attachedFiles : [];
+    if (attachedFiles.length === 0 && data.fileUrl) {
+      attachedFiles = [{
+        id: 'att-file-' + Date.now().toString(36),
+        name: data.fileName || 'Fichier joint',
+        url: data.fileUrl,
+        type: data.fileType || 'application/octet-stream',
+        size: data.fileSize || 0,
+        uploadedAt: createdAt
+      }];
+    }
+
+    const primaryFile = attachedFiles[0];
+    const fileUrl = primaryFile ? primaryFile.url : (data.fileUrl || '');
+    const fileName = primaryFile ? primaryFile.name : (data.fileName || '');
+    const fileType = primaryFile ? (primaryFile.type || '') : (data.fileType || '');
+    const fileSize = primaryFile ? (primaryFile.size || 0) : (data.fileSize || 0);
 
     this.db.prepare(`
       INSERT INTO courses (
         id, classId, title, category, description, content, resourceLink,
-        fileUrl, fileName, fileType, fileSize, createdAt
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        fileUrl, fileName, fileType, fileSize, resourceType, level, section, filesJson, createdAt
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       id,
       primaryClassId,
       data.title.trim(),
-      data.category,
+      data.category || 'Général',
       data.description?.trim() || '',
       data.content.trim(),
       data.resourceLink?.trim() || '',
-      data.fileUrl || '',
-      data.fileName || '',
-      data.fileType || '',
-      data.fileSize || 0,
+      fileUrl,
+      fileName,
+      fileType,
+      fileSize,
+      resourceType,
+      level,
+      section,
+      JSON.stringify(attachedFiles),
       createdAt
     );
 
     const insertClassStmt = this.db.prepare('INSERT OR IGNORE INTO course_classes (courseId, classId) VALUES (?, ?)');
     for (const cid of targetClasses) {
-      insertClassStmt.run(id, cid);
+      if (cid && cid !== 'all') {
+        insertClassStmt.run(id, cid);
+      }
     }
 
-    return {
-      id,
-      classId: primaryClassId,
-      classIds: targetClasses,
-      title: data.title.trim(),
-      category: data.category,
-      description: data.description?.trim() || '',
-      content: data.content.trim(),
-      resourceLink: data.resourceLink?.trim() || '',
-      fileUrl: data.fileUrl,
-      fileName: data.fileName,
-      fileType: data.fileType,
-      fileSize: data.fileSize,
-      createdAt
-    };
+    return this.getCourseById(id)!;
   }
 
   public updateCourse(courseId: string, data: Partial<Course> & { classIds?: string[] }): Course {
     const existing = this.getCourseById(courseId);
-    if (!existing) throw new Error('Cours introuvable');
+    if (!existing) throw new Error('Ressource introuvable');
 
     const title = data.title !== undefined ? data.title.trim() : existing.title;
     const category = data.category || existing.category;
     const description = data.description !== undefined ? data.description.trim() : existing.description;
     const content = data.content !== undefined ? data.content.trim() : existing.content;
     const resourceLink = data.resourceLink !== undefined ? data.resourceLink.trim() : existing.resourceLink;
-    const fileUrl = data.fileUrl !== undefined ? data.fileUrl : (existing.fileUrl || '');
-    const fileName = data.fileName !== undefined ? data.fileName : (existing.fileName || '');
-    const fileType = data.fileType !== undefined ? data.fileType : (existing.fileType || '');
-    const fileSize = data.fileSize !== undefined ? Number(data.fileSize) : (existing.fileSize || 0);
+    const resourceType = data.resourceType || existing.resourceType || 'cours';
+    const level = data.level !== undefined ? data.level : (existing.level || '1');
+    const section = data.section !== undefined ? data.section : (existing.section || 'Commun');
+
+    let attachedFiles: AttachedFile[] = existing.attachedFiles || [];
+    if (data.attachedFiles !== undefined) {
+      attachedFiles = data.attachedFiles;
+    } else if (data.fileUrl !== undefined) {
+      if (data.fileUrl) {
+        attachedFiles = [{
+          id: 'att-file-' + Date.now().toString(36),
+          name: data.fileName || 'Fichier joint',
+          url: data.fileUrl,
+          type: data.fileType || 'application/octet-stream',
+          size: data.fileSize || 0,
+          uploadedAt: new Date().toISOString()
+        }];
+      } else {
+        attachedFiles = [];
+      }
+    }
+
+    const primaryFile = attachedFiles[0];
+    const fileUrl = primaryFile ? primaryFile.url : (data.fileUrl !== undefined ? data.fileUrl : (existing.fileUrl || ''));
+    const fileName = primaryFile ? primaryFile.name : (data.fileName !== undefined ? data.fileName : (existing.fileName || ''));
+    const fileType = primaryFile ? (primaryFile.type || '') : (data.fileType !== undefined ? data.fileType : (existing.fileType || ''));
+    const fileSize = primaryFile ? (primaryFile.size || 0) : (data.fileSize !== undefined ? Number(data.fileSize) : (existing.fileSize || 0));
 
     let targetClasses = existing.classIds || [existing.classId];
     if (Array.isArray(data.classIds) && data.classIds.length > 0) {
@@ -1339,7 +1573,8 @@ for m in matieres:
     this.db.prepare(`
       UPDATE courses
       SET title = ?, category = ?, description = ?, content = ?, resourceLink = ?,
-          fileUrl = ?, fileName = ?, fileType = ?, fileSize = ?, classId = ?
+          fileUrl = ?, fileName = ?, fileType = ?, fileSize = ?, resourceType = ?,
+          level = ?, section = ?, filesJson = ?, classId = ?
       WHERE id = ?
     `).run(
       title,
@@ -1351,6 +1586,10 @@ for m in matieres:
       fileName,
       fileType,
       fileSize,
+      resourceType,
+      level,
+      section,
+      JSON.stringify(attachedFiles),
       primaryClassId,
       courseId
     );
@@ -1359,7 +1598,9 @@ for m in matieres:
       this.db.prepare('DELETE FROM course_classes WHERE courseId = ?').run(courseId);
       const insertClassStmt = this.db.prepare('INSERT OR IGNORE INTO course_classes (courseId, classId) VALUES (?, ?)');
       for (const cid of targetClasses) {
-        insertClassStmt.run(courseId, cid);
+        if (cid && cid !== 'all') {
+          insertClassStmt.run(courseId, cid);
+        }
       }
     }
 
@@ -1402,6 +1643,8 @@ for m in matieres:
         title: String(r.title),
         theme: r.theme as any,
         level: Number(r.level),
+        educationalLevel: r.educationalLevel ? String(r.educationalLevel) : '1',
+        section: r.section ? String(r.section) : 'Commun',
         timeLimitSeconds: Number(r.timeLimitSeconds),
         targetText: String(r.targetText),
         minAccuracyPercent: Number(r.minAccuracyPercent),
@@ -1410,6 +1653,128 @@ for m in matieres:
         createdAt: String(r.createdAt)
       };
     });
+  }
+
+  public getTypingTestsFiltered(filters?: { educationalLevel?: string; section?: string; classId?: string }): TypingTest[] {
+    let sql = `
+      SELECT DISTINCT t.* FROM tests t
+      LEFT JOIN test_classes tc ON tc.testId = t.id
+      WHERE 1=1
+    `;
+    const params: any[] = [];
+    if (filters?.classId) {
+      sql += ` AND (t.classId = ? OR tc.classId = ?)`;
+      params.push(filters.classId, filters.classId);
+    }
+    if (filters?.educationalLevel) {
+      sql += ` AND (t.educationalLevel = ? OR t.educationalLevel IS NULL OR t.educationalLevel = '')`;
+      params.push(filters.educationalLevel);
+    }
+    if (filters?.section) {
+      sql += ` AND (t.section = ? OR t.section = 'Commun' OR t.section IS NULL OR t.section = '')`;
+      params.push(filters.section);
+    }
+    sql += ` ORDER BY t.theme ASC, t.level ASC`;
+    const rows = this.db.prepare(sql).all(...params) as any[];
+
+    return rows.map((r) => {
+      const linkedClasses = this.getTestClasses(String(r.id));
+      const classIds = linkedClasses.length > 0 ? linkedClasses : [String(r.classId)];
+      return {
+        id: String(r.id),
+        classId: String(r.classId),
+        classIds,
+        title: String(r.title),
+        theme: r.theme as any,
+        level: Number(r.level),
+        educationalLevel: r.educationalLevel ? String(r.educationalLevel) : '1',
+        section: r.section ? String(r.section) : 'Commun',
+        timeLimitSeconds: Number(r.timeLimitSeconds),
+        targetText: String(r.targetText),
+        minAccuracyPercent: Number(r.minAccuracyPercent),
+        minWpm: Number(r.minWpm),
+        description: r.description ? String(r.description) : '',
+        createdAt: String(r.createdAt)
+      };
+    });
+  }
+
+  public getStudentTestsProgressFiltered(studentId: string): StudentTestStatus[] {
+    const student = this.getStudentById(studentId);
+    if (!student) return [];
+    const classInfo = this.getClassById(student.classId);
+    const educationalLevel = (student as any).educationalLevel || classInfo?.level || '1';
+    const section = (student as any).section || classInfo?.section || 'Commun';
+
+    const tests = this.getTypingTestsFiltered({
+      classId: student.classId,
+      educationalLevel,
+      section
+    });
+
+    const evals = this.db.prepare(`
+      SELECT * FROM test_evaluations
+      WHERE studentId = ?
+    `).all(studentId) as any[];
+
+    const evalsByTestId = new Map<string, TestEvaluation>();
+    for (const row of evals) {
+      const evaluation: TestEvaluation = {
+        id: String(row.id),
+        testId: String(row.testId),
+        studentId: String(row.studentId),
+        classId: String(row.classId),
+        wpm: Number(row.wpm),
+        cpm: Number(row.cpm),
+        accuracy: Number(row.accuracy),
+        mistakesCount: Number(row.mistakesCount),
+        timeSpentSeconds: Number(row.timeSpentSeconds),
+        passed: Boolean(row.passed),
+        score: Number(row.score),
+        completedAt: String(row.completedAt)
+      };
+
+      const existing = evalsByTestId.get(evaluation.testId);
+      if (!existing) {
+        evalsByTestId.set(evaluation.testId, evaluation);
+      } else {
+        if (evaluation.passed && !existing.passed) {
+          evalsByTestId.set(evaluation.testId, evaluation);
+        } else if (evaluation.passed === existing.passed && evaluation.score > existing.score) {
+          evalsByTestId.set(evaluation.testId, evaluation);
+        }
+      }
+    }
+
+    const themes = Array.from(new Set(tests.map(t => t.theme)));
+    const results: StudentTestStatus[] = [];
+
+    for (const theme of themes) {
+      const themeTests = tests.filter(t => t.theme === theme).sort((a, b) => a.level - b.level);
+      let canUnlockNext = true;
+
+      for (let i = 0; i < themeTests.length; i++) {
+        const test = themeTests[i];
+        const bestEval = evalsByTestId.get(test.id);
+
+        let isUnlocked = false;
+        if (i === 0) {
+          isUnlocked = true;
+        } else {
+          isUnlocked = canUnlockNext;
+        }
+
+        results.push({
+          test,
+          isUnlocked,
+          bestEvaluation: bestEval
+        });
+
+        canUnlockNext = Boolean(bestEval && bestEval.passed);
+      }
+    }
+
+    return results;
   }
 
   public getTestById(testId: string): TypingTest | undefined {
@@ -1424,6 +1789,8 @@ for m in matieres:
       title: String(r.title),
       theme: r.theme as any,
       level: Number(r.level),
+      educationalLevel: r.educationalLevel ? String(r.educationalLevel) : '1',
+      section: r.section ? String(r.section) : 'Commun',
       timeLimitSeconds: Number(r.timeLimitSeconds),
       targetText: String(r.targetText),
       minAccuracyPercent: Number(r.minAccuracyPercent),
@@ -1437,6 +1804,8 @@ for m in matieres:
     title: string;
     theme: 'Word' | 'Excel' | 'Python' | 'Général';
     level: number;
+    educationalLevel?: string;
+    section?: string;
     timeLimitSeconds: number;
     targetText: string;
     minAccuracyPercent?: number;
@@ -1448,6 +1817,8 @@ for m in matieres:
     const createdAt = new Date().toISOString();
     const minAccuracyPercent = data.minAccuracyPercent ? Number(data.minAccuracyPercent) : 80;
     const minWpm = data.minWpm ? Number(data.minWpm) : 15;
+    const educationalLevel = data.educationalLevel || '1';
+    const section = data.section || 'Commun';
 
     const targetClasses = (Array.isArray(data.classIds) && data.classIds.length > 0)
       ? Array.from(new Set(data.classIds))
@@ -1456,15 +1827,17 @@ for m in matieres:
 
     this.db.prepare(`
       INSERT INTO tests (
-        id, classId, title, theme, level, timeLimitSeconds, targetText,
+        id, classId, title, theme, level, educationalLevel, section, timeLimitSeconds, targetText,
         minAccuracyPercent, minWpm, description, createdAt
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       id,
       primaryClassId,
       data.title.trim(),
       data.theme,
       Number(data.level),
+      educationalLevel,
+      section,
       Number(data.timeLimitSeconds),
       data.targetText.trim(),
       minAccuracyPercent,
@@ -1485,6 +1858,8 @@ for m in matieres:
       title: data.title.trim(),
       theme: data.theme,
       level: Number(data.level),
+      educationalLevel,
+      section,
       timeLimitSeconds: Number(data.timeLimitSeconds),
       targetText: data.targetText.trim(),
       minAccuracyPercent,
@@ -1825,7 +2200,7 @@ for m in matieres:
   // ==========================================
   public authenticateStudent(classId: string, studentId: string, passwordAttempt: string): { student: Student; classInfo: ClassGroup } | null {
     const row = this.db.prepare(`
-      SELECT s.*, c.name as className, c.level, c.academicYear, c.room, c.description, c.createdAt as classCreatedAt
+      SELECT s.*, c.name as className, c.level, c.section, c.academicYear, c.room, c.description, c.createdAt as classCreatedAt
       FROM students s
       JOIN classes c ON c.id = s.classId
       WHERE s.id = ? AND s.classId = ?
@@ -1842,7 +2217,8 @@ for m in matieres:
       const classInfo: ClassGroup = {
         id: String(row.classId),
         name: String(row.className),
-        level: String(row.level),
+        level: String(row.level || '1'),
+        section: String(row.section || 'Commun'),
         academicYear: String(row.academicYear),
         room: row.room ? String(row.room) : '',
         description: row.description ? String(row.description) : '',
@@ -1929,6 +2305,62 @@ for m in matieres:
         durationMinutes: Number(r.durationMinutes || 0),
         totalPoints: Number(r.totalPoints || 20),
         isActive: Boolean(r.isActive),
+        level: r.level ? String(r.level) : '1',
+        section: r.section ? String(r.section) : 'Commun',
+        createdAt: String(r.createdAt),
+        questionCount: qCount,
+        submissionsCount: sCount,
+        classIds
+      };
+    });
+  }
+
+  public getQCMsFiltered(options: {
+    level?: string;
+    section?: string;
+    classId?: string;
+  }): QCM[] {
+    let query = `
+      SELECT DISTINCT q.* FROM qcms q
+      LEFT JOIN qcm_classes qc ON qc.qcmId = q.id
+      WHERE 1=1
+    `;
+    const params: any[] = [];
+    if (options.level && options.level !== 'all') {
+      query += ' AND q.level = ?';
+      params.push(options.level);
+    }
+    if (options.section && options.section !== 'all') {
+      query += ' AND q.section = ?';
+      params.push(options.section);
+    }
+    if (options.classId && options.classId !== 'all') {
+      query += ' AND (q.classId = ? OR qc.classId = ?)';
+      params.push(options.classId, options.classId);
+    }
+    query += ' ORDER BY q.createdAt DESC';
+
+    const rows = this.db.prepare(query).all(...params) as any[];
+    return rows.map(r => {
+      const qCount = (this.db.prepare('SELECT COUNT(*) as c FROM qcm_questions WHERE qcmId = ?').get(r.id) as any)?.c || 0;
+      const sCount = (this.db.prepare('SELECT COUNT(*) as c FROM qcm_submissions WHERE qcmId = ?').get(r.id) as any)?.c || 0;
+      const classRows = this.db.prepare('SELECT classId FROM qcm_classes WHERE qcmId = ?').all(r.id) as any[];
+      let classIds = classRows.map(c => String(c.classId));
+      if (classIds.length === 0 && r.classId) {
+        classIds = [String(r.classId)];
+      }
+
+      return {
+        id: String(r.id),
+        classId: String(r.classId),
+        title: String(r.title),
+        description: r.description ? String(r.description) : '',
+        category: r.category as any,
+        durationMinutes: Number(r.durationMinutes || 0),
+        totalPoints: Number(r.totalPoints || 20),
+        isActive: Boolean(r.isActive),
+        level: r.level ? String(r.level) : '1',
+        section: r.section ? String(r.section) : 'Commun',
         createdAt: String(r.createdAt),
         questionCount: qCount,
         submissionsCount: sCount,
@@ -1976,6 +2408,8 @@ for m in matieres:
       durationMinutes: Number(row.durationMinutes || 0),
       totalPoints: Number(row.totalPoints || 20),
       isActive: Boolean(row.isActive),
+      level: row.level ? String(row.level) : '1',
+      section: row.section ? String(row.section) : 'Commun',
       createdAt: String(row.createdAt),
       questionCount: questions.length,
       submissionsCount: sCount,
@@ -1991,6 +2425,8 @@ for m in matieres:
     durationMinutes?: number;
     totalPoints?: number;
     isActive?: boolean;
+    level?: string;
+    section?: string;
     classIds?: string[];
   }): QCM {
     const id = 'qcm-' + Math.random().toString(36).substring(2, 9);
@@ -1998,23 +2434,18 @@ for m in matieres:
     const duration = data.durationMinutes !== undefined ? Number(data.durationMinutes) : 0;
     const totalPoints = data.totalPoints !== undefined ? Number(data.totalPoints) : 20;
     const isActive = data.isActive !== undefined ? (data.isActive ? 1 : 0) : 1;
+    const level = data.level || '1';
+    const section = data.section || 'Commun';
 
     const targetClassIds = (data.classIds && data.classIds.length > 0)
       ? Array.from(new Set(data.classIds.filter(Boolean)))
-      : (classId ? [classId] : []);
+      : (classId && classId !== 'all' ? [classId] : []);
 
-    let primaryClassId = targetClassIds[0] || classId;
-    if (!primaryClassId) {
-      const firstClass = this.db.prepare('SELECT id FROM classes LIMIT 1').get() as { id: string } | undefined;
-      primaryClassId = firstClass?.id || 'all';
-      if (targetClassIds.length === 0) {
-        targetClassIds.push(primaryClassId);
-      }
-    }
+    let primaryClassId = targetClassIds[0] || (classId && classId !== 'all' ? classId : 'all');
 
     this.db.prepare(`
-      INSERT INTO qcms (id, classId, title, description, category, durationMinutes, totalPoints, isActive, createdAt)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO qcms (id, classId, title, description, category, durationMinutes, totalPoints, isActive, level, section, createdAt)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       id,
       primaryClassId,
@@ -2024,12 +2455,16 @@ for m in matieres:
       duration,
       totalPoints,
       isActive,
+      level,
+      section,
       createdAt
     );
 
     const insertClassStmt = this.db.prepare('INSERT OR IGNORE INTO qcm_classes (qcmId, classId) VALUES (?, ?)');
     for (const cid of targetClassIds) {
-      insertClassStmt.run(id, cid);
+      if (cid && cid !== 'all') {
+        insertClassStmt.run(id, cid);
+      }
     }
 
     return this.getQCMById(id)!;
@@ -2042,6 +2477,8 @@ for m in matieres:
     durationMinutes: number;
     totalPoints: number;
     isActive: boolean;
+    level: string;
+    section: string;
     classIds: string[];
   }>): QCM {
     const existing = this.getQCMById(qcmId);
@@ -2053,6 +2490,8 @@ for m in matieres:
     const duration = data.durationMinutes !== undefined ? Number(data.durationMinutes) : existing.durationMinutes;
     const totalPoints = data.totalPoints !== undefined ? Number(data.totalPoints) : existing.totalPoints;
     const isActive = data.isActive !== undefined ? (data.isActive ? 1 : 0) : (existing.isActive ? 1 : 0);
+    const level = data.level !== undefined ? data.level : (existing.level || '1');
+    const section = data.section !== undefined ? data.section : (existing.section || 'Commun');
 
     let newPrimaryClassId = existing.classId;
 
@@ -2063,16 +2502,19 @@ for m in matieres:
         this.db.prepare('DELETE FROM qcm_classes WHERE qcmId = ?').run(qcmId);
         const insertClassStmt = this.db.prepare('INSERT OR IGNORE INTO qcm_classes (qcmId, classId) VALUES (?, ?)');
         for (const cid of targetClassIds) {
-          insertClassStmt.run(qcmId, cid);
+          if (cid && cid !== 'all') {
+            insertClassStmt.run(qcmId, cid);
+          }
         }
       }
     }
 
     this.db.prepare(`
       UPDATE qcms
-      SET classId = ?, title = ?, description = ?, category = ?, durationMinutes = ?, totalPoints = ?, isActive = ?
+      SET classId = ?, title = ?, description = ?, category = ?, durationMinutes = ?,
+          totalPoints = ?, isActive = ?, level = ?, section = ?
       WHERE id = ?
-    `).run(newPrimaryClassId, title, description, category, duration, totalPoints, isActive, qcmId);
+    `).run(newPrimaryClassId, title, description, category, duration, totalPoints, isActive, level, section, qcmId);
 
     return this.getQCMById(qcmId)!;
   }
@@ -2242,6 +2684,64 @@ for m in matieres:
     });
   }
 
+  public getStudentQCMsProgressFiltered(studentId: string): StudentQCMStatus[] {
+    const student = this.getStudentById(studentId);
+    if (!student) return [];
+
+    const studentClass = this.getClassById(student.classId);
+    const studentLevel = studentClass?.level || student.level || '1';
+    const studentSection = studentClass?.section || student.section || 'Commun';
+
+    const qcmRows = this.db.prepare(`
+      SELECT DISTINCT q.*
+      FROM qcms q
+      LEFT JOIN qcm_classes qc ON qc.qcmId = q.id
+      WHERE q.isActive = 1 AND (
+        qc.classId = ?
+        OR q.classId = ?
+        OR (q.level = ? AND (q.section = ? OR q.section = 'Commun'))
+      )
+      ORDER BY q.createdAt DESC
+    `).all(student.classId, student.classId, studentLevel, studentSection) as any[];
+
+    return qcmRows.map(r => {
+      const qcm = this.getQCMById(r.id, true)!;
+      const subRow = this.db.prepare(`
+        SELECT * FROM qcm_submissions
+        WHERE qcmId = ? AND studentId = ?
+        ORDER BY completedAt DESC
+        LIMIT 1
+      `).get(r.id, studentId) as any;
+
+      let submission: QCMSubmission | undefined;
+      if (subRow) {
+        let answers = {};
+        try {
+          answers = JSON.parse(subRow.answersJson);
+        } catch {}
+
+        submission = {
+          id: String(subRow.id),
+          qcmId: String(subRow.qcmId),
+          studentId: String(subRow.studentId),
+          classId: String(subRow.classId),
+          totalScore: Number(subRow.totalScore),
+          maxScore: Number(subRow.maxScore),
+          score20: Number(subRow.score20),
+          answersJson: answers,
+          timeSpentSeconds: Number(subRow.timeSpentSeconds),
+          completedAt: String(subRow.completedAt)
+        };
+      }
+
+      return {
+        qcm,
+        isCompleted: Boolean(submission),
+        submission
+      };
+    });
+  }
+
   public submitQCM(studentId: string, qcmId: string, answers: Record<string, string>, timeSpentSeconds: number): QCMSubmission {
     const student = this.getStudentById(studentId);
     if (!student) throw new Error('Élève introuvable');
@@ -2253,6 +2753,7 @@ for m in matieres:
     let totalScore = 0;
     let maxScore = 0;
     const detailedAnswers: Record<string, { chosen: 'A' | 'B' | 'C' | 'D' | ''; isCorrect: boolean; pointsEarned: number }> = {};
+    let correctCount = 0;
 
     for (const q of qcm.questions) {
       const chosen = (answers[q.id] || '').toUpperCase().trim() as 'A' | 'B' | 'C' | 'D' | '';
@@ -2262,6 +2763,7 @@ for m in matieres:
 
       const pointsEarned = isCorrect ? points : 0;
       totalScore += pointsEarned;
+      if (isCorrect) correctCount++;
 
       detailedAnswers[q.id] = {
         chosen,
@@ -2271,6 +2773,9 @@ for m in matieres:
     }
 
     if (maxScore === 0) maxScore = 1;
+    const totalQuestions = qcm.questions.length;
+    const incorrectCount = totalQuestions - correctCount;
+    const successRate = totalQuestions > 0 ? Math.round((correctCount / totalQuestions) * 100) : 0;
     const score20 = Math.round((totalScore / maxScore) * 20 * 10) / 10;
     const completedAt = new Date().toISOString();
 
@@ -2285,7 +2790,7 @@ for m in matieres:
     const isPractice = Boolean(existingSubRow);
     const subId = existingSubRow ? ('practice-' + Math.random().toString(36).substring(2, 9)) : ('sub-' + Math.random().toString(36).substring(2, 9));
 
-    // ONLY the very first validation is recorded and graded in the database!
+    // ONLY the very first validation is recorded as official submission
     if (!isPractice) {
       this.db.prepare(`
         INSERT INTO qcm_submissions (
@@ -2305,6 +2810,34 @@ for m in matieres:
       );
     }
 
+    // Always record EVERY attempt in qcm_attempts for student history and question statistics
+    const attemptId = 'att-' + Math.random().toString(36).substring(2, 9) + '-' + Date.now().toString(36);
+    try {
+      this.db.prepare(`
+        INSERT INTO qcm_attempts (
+          id, qcmId, studentId, classId, totalQuestions, correctCount, incorrectCount,
+          successRate, totalScore, maxScore, score20, timeSpentSeconds, completedAt, answersJson
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        attemptId,
+        qcmId,
+        studentId,
+        student.classId,
+        totalQuestions,
+        correctCount,
+        incorrectCount,
+        successRate,
+        Math.round(totalScore * 10) / 10,
+        Math.round(maxScore * 10) / 10,
+        score20,
+        Number(timeSpentSeconds) || 0,
+        completedAt,
+        JSON.stringify(detailedAnswers)
+      );
+    } catch (attErr) {
+      console.warn('Failed to insert into qcm_attempts:', attErr);
+    }
+
     return {
       id: subId,
       qcmId,
@@ -2320,6 +2853,213 @@ for m in matieres:
       qcmTitle: qcm.title,
       isPractice,
       officialScore20: existingSubRow ? Number(existingSubRow.score20) : score20
+    };
+  }
+
+  public getStudentQCMAttempts(studentId: string, qcmId?: string): QCMAttempt[] {
+    let query = `
+      SELECT qa.*, q.title as qcmTitle, q.level, q.section, s.firstName, s.lastName, c.name as className
+      FROM qcm_attempts qa
+      JOIN qcms q ON q.id = qa.qcmId
+      JOIN students s ON s.id = qa.studentId
+      JOIN classes c ON c.id = qa.classId
+      WHERE qa.studentId = ?
+    `;
+    const params: any[] = [studentId];
+    if (qcmId && qcmId !== 'all') {
+      query += ' AND qa.qcmId = ?';
+      params.push(qcmId);
+    }
+    query += ' ORDER BY qa.completedAt DESC';
+
+    try {
+      const rows = this.db.prepare(query).all(...params) as any[];
+      return rows.map(r => {
+        let answersJson = {};
+        try { answersJson = JSON.parse(r.answersJson); } catch {}
+        return {
+          id: String(r.id),
+          qcmId: String(r.qcmId),
+          qcmTitle: String(r.qcmTitle || 'QCM'),
+          studentId: String(r.studentId),
+          studentName: `${r.lastName.toUpperCase()} ${r.firstName}`,
+          classId: String(r.classId),
+          className: String(r.className || ''),
+          level: r.level ? String(r.level) : undefined,
+          section: r.section ? String(r.section) : undefined,
+          totalQuestions: Number(r.totalQuestions),
+          correctCount: Number(r.correctCount),
+          incorrectCount: Number(r.incorrectCount),
+          successRate: Number(r.successRate),
+          totalScore: Number(r.totalScore),
+          maxScore: Number(r.maxScore),
+          score20: Number(r.score20),
+          timeSpentSeconds: Number(r.timeSpentSeconds || 0),
+          completedAt: String(r.completedAt),
+          answersJson
+        };
+      });
+    } catch (err) {
+      console.warn('Error fetching qcm_attempts:', err);
+      return [];
+    }
+  }
+
+  public getQCMGlobalStats(filters?: { level?: string; section?: string; classId?: string; qcmId?: string }): QCMGlobalStats {
+    let qcmQuery = 'SELECT * FROM qcms WHERE 1=1';
+    const qcmParams: any[] = [];
+    if (filters?.qcmId && filters.qcmId !== 'all') {
+      qcmQuery += ' AND id = ?';
+      qcmParams.push(filters.qcmId);
+    }
+    if (filters?.level && filters.level !== 'all') {
+      qcmQuery += ' AND level = ?';
+      qcmParams.push(filters.level);
+    }
+    if (filters?.section && filters.section !== 'all') {
+      qcmQuery += ' AND section = ?';
+      qcmParams.push(filters.section);
+    }
+    if (filters?.classId && filters.classId !== 'all') {
+      qcmQuery += ' AND (classId = ? OR id IN (SELECT qcmId FROM qcm_classes WHERE classId = ?))';
+      qcmParams.push(filters.classId, filters.classId);
+    }
+
+    const qcms = this.db.prepare(qcmQuery).all(...qcmParams) as any[];
+
+    // Get attempts
+    let attQuery = `
+      SELECT qa.*, q.title as qcmTitle, q.level, q.section, s.firstName, s.lastName, c.name as className
+      FROM qcm_attempts qa
+      JOIN qcms q ON q.id = qa.qcmId
+      JOIN students s ON s.id = qa.studentId
+      JOIN classes c ON c.id = qa.classId
+      WHERE 1=1
+    `;
+    const attParams: any[] = [];
+    if (filters?.qcmId && filters.qcmId !== 'all') {
+      attQuery += ' AND qa.qcmId = ?';
+      attParams.push(filters.qcmId);
+    }
+    if (filters?.level && filters.level !== 'all') {
+      attQuery += ' AND q.level = ?';
+      attParams.push(filters.level);
+    }
+    if (filters?.section && filters.section !== 'all') {
+      attQuery += ' AND q.section = ?';
+      attParams.push(filters.section);
+    }
+    if (filters?.classId && filters.classId !== 'all') {
+      attQuery += ' AND qa.classId = ?';
+      attParams.push(filters.classId);
+    }
+    attQuery += ' ORDER BY qa.completedAt DESC';
+
+    let attRows: any[] = [];
+    try {
+      attRows = this.db.prepare(attQuery).all(...attParams) as any[];
+    } catch {}
+
+    const attempts: QCMAttempt[] = attRows.map(r => {
+      let answersJson = {};
+      try { answersJson = JSON.parse(r.answersJson); } catch {}
+      return {
+        id: String(r.id),
+        qcmId: String(r.qcmId),
+        qcmTitle: String(r.qcmTitle || 'QCM'),
+        studentId: String(r.studentId),
+        studentName: `${r.lastName.toUpperCase()} ${r.firstName}`,
+        classId: String(r.classId),
+        className: String(r.className || ''),
+        level: r.level ? String(r.level) : undefined,
+        section: r.section ? String(r.section) : undefined,
+        totalQuestions: Number(r.totalQuestions),
+        correctCount: Number(r.correctCount),
+        incorrectCount: Number(r.incorrectCount),
+        successRate: Number(r.successRate),
+        totalScore: Number(r.totalScore),
+        maxScore: Number(r.maxScore),
+        score20: Number(r.score20),
+        timeSpentSeconds: Number(r.timeSpentSeconds || 0),
+        completedAt: String(r.completedAt),
+        answersJson
+      };
+    });
+
+    // Analyze questions
+    const qcmIds = qcms.map(q => q.id);
+    let allQuestions: any[] = [];
+    if (qcmIds.length > 0) {
+      const placeholders = qcmIds.map(() => '?').join(',');
+      allQuestions = this.db.prepare(`
+        SELECT q.*, qcm.title as qcmTitle, qcm.level, qcm.section, qcm.category
+        FROM qcm_questions q
+        JOIN qcms qcm ON qcm.id = q.qcmId
+        WHERE q.qcmId IN (${placeholders})
+        ORDER BY q.qcmId, q.questionOrder ASC
+      `).all(...qcmIds) as any[];
+    }
+
+    const questionsAnalysis: QCMQuestionAnalysis[] = allQuestions.map(q => {
+      let totalAnswers = 0;
+      let correctAnswers = 0;
+      const optionCounts: Record<string, number> = { A: 0, B: 0, C: 0, D: 0 };
+
+      for (const att of attempts) {
+        if (att.qcmId === q.qcmId && att.answersJson && att.answersJson[q.id]) {
+          const ans = att.answersJson[q.id];
+          if (ans.chosen) {
+            totalAnswers++;
+            if (ans.chosen in optionCounts) {
+              optionCounts[ans.chosen]++;
+            }
+            if (ans.isCorrect) correctAnswers++;
+          }
+        }
+      }
+
+      const incorrectAnswers = totalAnswers - correctAnswers;
+      const successRate = totalAnswers > 0 ? Math.round((correctAnswers / totalAnswers) * 100) : 0;
+      const failureRate = totalAnswers > 0 ? Math.round((incorrectAnswers / totalAnswers) * 100) : 0;
+      
+      let difficultyLevel: 'facile' | 'moyen' | 'difficile' = 'moyen';
+      if (totalAnswers > 0) {
+        if (successRate >= 75) difficultyLevel = 'facile';
+        else if (successRate < 50) difficultyLevel = 'difficile';
+      }
+
+      return {
+        questionId: String(q.id),
+        questionOrder: Number(q.questionOrder),
+        questionText: String(q.questionText),
+        qcmId: String(q.qcmId),
+        qcmTitle: String(q.qcmTitle),
+        category: q.category ? String(q.category) : undefined,
+        level: q.level ? String(q.level) : undefined,
+        section: q.section ? String(q.section) : undefined,
+        totalAnswers,
+        correctAnswers,
+        incorrectAnswers,
+        successRate,
+        failureRate,
+        difficultyLevel,
+        optionCounts
+      };
+    });
+
+    const totalAttempts = attempts.length;
+    const sumScore20 = attempts.reduce((acc, a) => acc + a.score20, 0);
+    const averageScore20 = totalAttempts > 0 ? Math.round((sumScore20 / totalAttempts) * 10) / 10 : 0;
+    const sumSuccessRate = attempts.reduce((acc, a) => acc + a.successRate, 0);
+    const averageSuccessRate = totalAttempts > 0 ? Math.round(sumSuccessRate / totalAttempts) : 0;
+
+    return {
+      totalAttempts,
+      averageScore20,
+      averageSuccessRate,
+      totalQcms: qcms.length,
+      questionsAnalysis,
+      attempts
     };
   }
 
@@ -2501,6 +3241,51 @@ for m in matieres:
     const lateCount = formattedRecords.filter(r => r.status === 'late').length;
     const excusedCount = formattedRecords.filter(r => r.status === 'excused').length;
 
+    // Retrieve QCM attempts for this class on this session's date (or for students in this class)
+    let parsedQCMAttempts: QCMAttempt[] = [];
+    try {
+      const qcmAttemptsRows = this.db.prepare(`
+        SELECT qa.*, q.title as qcmTitle, q.level, q.section, s.firstName, s.lastName, c.name as className
+        FROM qcm_attempts qa
+        JOIN qcms q ON q.id = qa.qcmId
+        JOIN students s ON s.id = qa.studentId
+        JOIN classes c ON c.id = qa.classId
+        WHERE qa.classId = ? AND (qa.completedAt LIKE ? OR substr(qa.completedAt, 1, 10) = ?)
+        ORDER BY qa.completedAt DESC
+      `).all(session.classId, session.date + '%', session.date) as any[];
+
+      parsedQCMAttempts = qcmAttemptsRows.map(r => {
+        let answersJson = {};
+        try { answersJson = JSON.parse(r.answersJson); } catch {}
+        return {
+          id: String(r.id),
+          qcmId: String(r.qcmId),
+          qcmTitle: String(r.qcmTitle || 'QCM'),
+          studentId: String(r.studentId),
+          studentName: `${r.lastName.toUpperCase()} ${r.firstName}`,
+          classId: String(r.classId),
+          className: String(r.className || ''),
+          level: r.level ? String(r.level) : undefined,
+          section: r.section ? String(r.section) : undefined,
+          totalQuestions: Number(r.totalQuestions),
+          correctCount: Number(r.correctCount),
+          incorrectCount: Number(r.incorrectCount),
+          successRate: Number(r.successRate),
+          totalScore: Number(r.totalScore),
+          maxScore: Number(r.maxScore),
+          score20: Number(r.score20),
+          timeSpentSeconds: Number(r.timeSpentSeconds || 0),
+          completedAt: String(r.completedAt),
+          answersJson
+        };
+      });
+    } catch {}
+
+    const qcmTotal = parsedQCMAttempts.length;
+    const qcmAvg = qcmTotal > 0 ? Math.round((parsedQCMAttempts.reduce((acc, a) => acc + a.score20, 0) / qcmTotal) * 10) / 10 : 0;
+    const qcmPassed = parsedQCMAttempts.filter(a => a.score20 >= 10).length;
+    const qcmSuccess = qcmTotal > 0 ? Math.round((parsedQCMAttempts.reduce((acc, a) => acc + a.successRate, 0) / qcmTotal)) : 0;
+
     return {
       id: String(session.id),
       classId: String(session.classId),
@@ -2515,7 +3300,14 @@ for m in matieres:
       absentCount,
       lateCount,
       excusedCount,
-      records: formattedRecords
+      records: formattedRecords,
+      qcmStats: {
+        totalAttempts: qcmTotal,
+        averageScore20: qcmAvg,
+        successRate: qcmSuccess,
+        passedCount: qcmPassed,
+        attempts: parsedQCMAttempts
+      }
     };
   }
 
@@ -3406,6 +4198,249 @@ for m in matieres:
       this.db.exec('ROLLBACK;');
       throw new Error(`Échec de la restauration : ${err.message}`);
     }
+  }
+
+  public getClassFinalReport(classId: string): ClassFinalReport {
+    const classInfo = this.getClassById(classId);
+    if (!classInfo) throw new Error('Classe introuvable');
+
+    const students = this.getStudentsByClass(classId, false);
+
+    // 1. All typing evaluations for this class
+    const evalsRows = this.db.prepare(`
+      SELECT e.*, t.title as testTitle
+      FROM test_evaluations e
+      JOIN tests t ON t.id = e.testId
+      WHERE e.classId = ?
+      ORDER BY e.completedAt ASC
+    `).all(classId) as any[];
+
+    // 2. All QCM submissions for this class
+    const qcmSubsRows = this.db.prepare(`
+      SELECT qs.*, qcm.title as qcmTitle
+      FROM qcm_submissions qs
+      JOIN qcms qcm ON qcm.id = qs.qcmId
+      WHERE qs.classId = ?
+      ORDER BY qs.completedAt ASC
+    `).all(classId) as any[];
+
+    // 3. All attendance sessions and their records
+    const sessionRows = this.db.prepare(`
+      SELECT * FROM attendance_sessions
+      WHERE classId = ?
+      ORDER BY date ASC, createdAt ASC
+    `).all(classId) as any[];
+
+    const recordRows = this.db.prepare(`
+      SELECT r.*, s.date as sessionDate, s.title as sessionTitle, s.startTime, s.endTime
+      FROM attendance_records r
+      JOIN attendance_sessions s ON s.id = r.sessionId
+      WHERE s.classId = ?
+      ORDER BY s.date ASC
+    `).all(classId) as any[];
+
+    function getTrimester(dateStr: string): 1 | 2 | 3 {
+      if (!dateStr) return 1;
+      const d = new Date(dateStr);
+      const m = isNaN(d.getTime()) ? 9 : (d.getMonth() + 1);
+      if (m >= 9 && m <= 12) return 1;
+      if (m >= 1 && m <= 3) return 2;
+      return 3;
+    }
+
+    const buildTrimesterReport = (trimesterNum: number, name: string, period: string): TrimesterFinalReport => {
+      // Filter sessions for this trimester
+      const filteredSessions = sessionRows.filter(s => trimesterNum === 0 || getTrimester(s.date) === trimesterNum);
+      const sessionIds = new Set(filteredSessions.map(s => s.id));
+
+      const filteredRecords = recordRows.filter(r => sessionIds.has(r.sessionId));
+      const filteredTyping = evalsRows.filter(e => trimesterNum === 0 || getTrimester(e.completedAt) === trimesterNum);
+      const filteredQcms = qcmSubsRows.filter(q => trimesterNum === 0 || getTrimester(q.completedAt) === trimesterNum);
+
+      let totalAttachedFilesCount = 0;
+
+      const studentReports: StudentFinalReport[] = students.map(std => {
+        // Typing for this student
+        const stdTyping = filteredTyping.filter(e => e.studentId === std.id);
+        const typingTestsCount = stdTyping.length;
+        const typingTotalScore = Math.round(stdTyping.reduce((acc, e) => acc + Number(e.score || 0), 0) * 10) / 10;
+        const typingAverageScore = typingTestsCount > 0 ? Math.round((typingTotalScore / typingTestsCount) * 10) / 10 : 0;
+        const typingAverageWpm = typingTestsCount > 0 ? Math.round(stdTyping.reduce((acc, e) => acc + Number(e.wpm || 0), 0) / typingTestsCount) : 0;
+        const typingAverageAccuracy = typingTestsCount > 0 ? Math.round(stdTyping.reduce((acc, e) => acc + Number(e.accuracy || 0), 0) / typingTestsCount) : 0;
+        const typingHistory: StudentTypingHistoryItem[] = stdTyping.map(e => ({
+          testId: String(e.testId),
+          testTitle: String(e.testTitle || 'Test de frappe'),
+          score: Number(e.score || 0),
+          wpm: Number(e.wpm || 0),
+          cpm: Number(e.cpm || 0),
+          accuracy: Number(e.accuracy || 0),
+          mistakesCount: Number(e.mistakesCount || 0),
+          passed: Boolean(e.passed),
+          completedAt: String(e.completedAt)
+        }));
+
+        // QCM for this student
+        const stdQcms = filteredQcms.filter(q => q.studentId === std.id);
+        const qcmCount = stdQcms.length;
+        const qcmTotalScore = Math.round(stdQcms.reduce((acc, q) => acc + Number(q.score20 || 0), 0) * 10) / 10;
+        const qcmAverageScore20 = qcmCount > 0 ? Math.round((qcmTotalScore / qcmCount) * 10) / 10 : 0;
+        const qcmHistory: StudentQCMHistoryItem[] = stdQcms.map(q => ({
+          qcmId: String(q.qcmId),
+          qcmTitle: String(q.qcmTitle || 'QCM'),
+          score20: Number(q.score20 || 0),
+          totalScore: Number(q.totalScore || 0),
+          maxScore: Number(q.maxScore || 0),
+          timeSpentSeconds: Number(q.timeSpentSeconds || 0),
+          completedAt: String(q.completedAt)
+        }));
+
+        // Combined scores & averages
+        const totalCombinedScore = Math.round((typingTotalScore + qcmTotalScore) * 10) / 10;
+        let overallAverage20 = 0;
+        if (typingTestsCount > 0 && qcmCount > 0) {
+          overallAverage20 = Math.round(((typingAverageScore + qcmAverageScore20) / 2) * 10) / 10;
+        } else if (typingTestsCount > 0) {
+          overallAverage20 = typingAverageScore;
+        } else if (qcmCount > 0) {
+          overallAverage20 = qcmAverageScore20;
+        }
+
+        // Sessions & Attendance for this student
+        const stdRecords = filteredRecords.filter(r => r.studentId === std.id);
+        const stdRecordsBySession = new Map(stdRecords.map(r => [r.sessionId, r]));
+
+        const sessionsHistory: StudentSessionHistoryItem[] = filteredSessions.map(s => {
+          const rec = stdRecordsBySession.get(s.id);
+          const status = (rec?.status || 'present') as AttendanceStatus;
+          return {
+            sessionId: String(s.id),
+            sessionTitle: String(s.title),
+            sessionDate: String(s.date),
+            startTime: s.startTime ? String(s.startTime) : undefined,
+            endTime: s.endTime ? String(s.endTime) : undefined,
+            status: status as any,
+            notes: rec?.notes ? String(rec.notes) : undefined,
+            activityFileUrl: rec?.activityFileUrl ? String(rec.activityFileUrl) : undefined,
+            activityFileName: rec?.activityFileName ? String(rec.activityFileName) : undefined,
+            activityFileType: rec?.activityFileType ? String(rec.activityFileType) : undefined,
+            activityFileSize: rec?.activityFileSize ? Number(rec.activityFileSize) : undefined,
+            activityUploadedAt: rec?.activityUploadedAt ? String(rec.activityUploadedAt) : undefined
+          };
+        });
+
+        const sessionsCount = filteredSessions.length;
+        const presentCount = sessionsHistory.filter(h => h.status === 'present').length;
+        const absentCount = sessionsHistory.filter(h => h.status === 'absent').length;
+        const lateCount = sessionsHistory.filter(h => h.status === 'late').length;
+        const excusedCount = sessionsHistory.filter(h => h.status === 'excused').length;
+        const attendanceRate = sessionsCount > 0 ? Math.round(((presentCount + (lateCount * 0.8)) / sessionsCount) * 100) : 100;
+
+        const attachedFiles = sessionsHistory
+          .filter(h => Boolean(h.activityFileUrl))
+          .map(h => ({
+            fileName: h.activityFileName || 'fichier',
+            fileUrl: h.activityFileUrl!,
+            fileSize: h.activityFileSize || 0,
+            fileType: h.activityFileType || 'application/octet-stream',
+            uploadedAt: h.activityUploadedAt || h.sessionDate,
+            sessionTitle: h.sessionTitle,
+            sessionDate: h.sessionDate
+          }));
+
+        totalAttachedFilesCount += attachedFiles.length;
+
+        return {
+          studentId: std.id,
+          firstName: std.firstName,
+          lastName: std.lastName,
+          studentNumber: std.studentNumber,
+          isRepeating: Boolean(std.isRepeating),
+          typingTestsCount,
+          typingAverageScore,
+          typingAverageWpm,
+          typingAverageAccuracy,
+          typingTotalScore,
+          typingHistory,
+          qcmCount,
+          qcmAverageScore20,
+          qcmTotalScore,
+          qcmHistory,
+          totalCombinedScore,
+          overallAverage20,
+          sessionsCount,
+          presentCount,
+          absentCount,
+          lateCount,
+          excusedCount,
+          attendanceRate,
+          attachedFilesCount: attachedFiles.length,
+          attachedFiles,
+          sessionsHistory
+        };
+      });
+
+      // Class Averages
+      const activeStudentsTyping = studentReports.filter(s => s.typingTestsCount > 0);
+      const activeStudentsQcm = studentReports.filter(s => s.qcmCount > 0);
+      const activeStudentsOverall = studentReports.filter(s => s.typingTestsCount > 0 || s.qcmCount > 0);
+
+      const classAverageTypingScore = activeStudentsTyping.length > 0
+        ? Math.round((activeStudentsTyping.reduce((acc, s) => acc + s.typingAverageScore, 0) / activeStudentsTyping.length) * 10) / 10
+        : 0;
+
+      const classAverageWpm = activeStudentsTyping.length > 0
+        ? Math.round(activeStudentsTyping.reduce((acc, s) => acc + s.typingAverageWpm, 0) / activeStudentsTyping.length)
+        : 0;
+
+      const classAverageAccuracy = activeStudentsTyping.length > 0
+        ? Math.round(activeStudentsTyping.reduce((acc, s) => acc + s.typingAverageAccuracy, 0) / activeStudentsTyping.length)
+        : 0;
+
+      const classAverageQCMScore = activeStudentsQcm.length > 0
+        ? Math.round((activeStudentsQcm.reduce((acc, s) => acc + s.qcmAverageScore20, 0) / activeStudentsQcm.length) * 10) / 10
+        : 0;
+
+      const classAverageTotalScore = studentReports.length > 0
+        ? Math.round((studentReports.reduce((acc, s) => acc + s.totalCombinedScore, 0) / studentReports.length) * 10) / 10
+        : 0;
+
+      const classAverageOverall20 = activeStudentsOverall.length > 0
+        ? Math.round((activeStudentsOverall.reduce((acc, s) => acc + s.overallAverage20, 0) / activeStudentsOverall.length) * 10) / 10
+        : 0;
+
+      const classAttendanceRate = studentReports.length > 0
+        ? Math.round(studentReports.reduce((acc, s) => acc + s.attendanceRate, 0) / studentReports.length)
+        : 100;
+
+      return {
+        trimester: trimesterNum,
+        name,
+        period,
+        totalSessions: filteredSessions.length,
+        totalTypingTests: filteredTyping.length,
+        totalQcms: filteredQcms.length,
+        classAverageTypingScore,
+        classAverageWpm,
+        classAverageAccuracy,
+        classAverageQCMScore,
+        classAverageTotalScore,
+        classAverageOverall20,
+        classAttendanceRate,
+        totalAttachedFilesCount,
+        studentReports
+      };
+    };
+
+    return {
+      classInfo,
+      generatedAt: new Date().toISOString(),
+      trimesters: {
+        annual: buildTrimesterReport(0, 'Bilan Annuel Complet', 'Année scolaire complète'),
+        t1: buildTrimesterReport(1, 'Trimestre 1', 'Septembre - Décembre'),
+        t2: buildTrimesterReport(2, 'Trimestre 2', 'Janvier - Mars'),
+        t3: buildTrimesterReport(3, 'Trimestre 3', 'Avril - Juin')
+      }
+    };
   }
 }
 

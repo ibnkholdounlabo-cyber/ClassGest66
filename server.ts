@@ -8,7 +8,7 @@ async function startServer() {
   const app = express();
   const PORT = 3000;
   const TOKEN_SECRET = 'intranet_school_secure_token_secret_key_2024';
-  const STUDENT_SESSION_DURATION_MS = 30 * 60 * 1000; // Limite de 30 minutes pour les élèves
+  const STUDENT_SESSION_DURATION_MS = 60 * 60 * 1000; // Limite de 1 heure (60 minutes) pour les élèves
   const TEACHER_SESSION_DURATION_MS = 4 * 60 * 60 * 1000; // Durée de session professeur : 4 heures (240 minutes)
 
   app.use(express.json({ limit: '50mb' }));
@@ -49,7 +49,7 @@ async function startServer() {
       const cached = activeSessions.get(token)!;
       if (now > cached.expiresAt) {
         activeSessions.delete(token);
-        return null; // Session expirée après 30 minutes
+        return null; // Session expirée après 1 heure
       }
       return cached;
     }
@@ -112,7 +112,7 @@ async function startServer() {
     const session = verifyToken(token);
     if (!session) {
       return res.status(401).json({
-        error: 'Session expirée (durée maximale : 30 minutes) ou invalide. Veuillez vous reconnecter.',
+        error: 'Session expirée (durée maximale : 1 heure) ou invalide. Veuillez vous reconnecter.',
         code: 'SESSION_EXPIRED'
       });
     }
@@ -133,7 +133,7 @@ async function startServer() {
     const session = verifyToken(token);
     if (!session) {
       return res.status(401).json({
-        error: 'Session expirée (durée maximale : 30 minutes) ou invalide. Veuillez vous reconnecter.',
+        error: 'Session expirée (durée maximale : 1 heure) ou invalide. Veuillez vous reconnecter.',
         code: 'SESSION_EXPIRED'
       });
     }
@@ -154,7 +154,7 @@ async function startServer() {
     const session = verifyToken(token);
     if (!session) {
       return res.status(401).json({
-        error: 'Session expirée (durée maximale : 30 minutes) ou invalide. Veuillez vous reconnecter.',
+        error: 'Session expirée (durée maximale : 1 heure) ou invalide. Veuillez vous reconnecter.',
         code: 'SESSION_EXPIRED'
       });
     }
@@ -295,7 +295,7 @@ async function startServer() {
     if (!session) {
       return res.status(401).json({
         valid: false,
-        error: 'Session expirée (durée maximale : 30 minutes). Veuillez vous reconnecter.',
+        error: 'Session expirée (durée maximale : 1 heure). Veuillez vous reconnecter.',
         code: 'SESSION_EXPIRED'
       });
     }
@@ -386,15 +386,25 @@ async function startServer() {
 
   // Create class
   app.post('/api/teacher/classes', requireTeacher, (req, res) => {
-    const { name, level, academicYear, room, description } = req.body;
+    const { name, level, academicYear, room, description, section } = req.body;
     if (!name) {
       return res.status(400).json({ error: 'Le nom de la classe est obligatoire (ex: 6ème B)' });
     }
     try {
-      const newClass = db.createClass(name, level || 'Général', academicYear || '2024-2025', room, description);
+      const newClass = db.createClass(name, level || '1', academicYear || '2024-2025', room, description, section);
       res.status(201).json(newClass);
     } catch (err: any) {
       res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Update class
+  app.put('/api/teacher/classes/:id', requireTeacher, (req, res) => {
+    try {
+      const updated = db.updateClass(req.params.id, req.body);
+      res.json(updated);
+    } catch (err: any) {
+      res.status(400).json({ error: err.message });
     }
   });
 
@@ -683,21 +693,80 @@ async function startServer() {
   });
 
   // ==========================================
-  // COURSES ROUTES (COURS)
+  // COURSES & EDUCATIONAL RESOURCES (COURS, EXERCICES, EXAMENS)
   // ==========================================
+  // Get educational resources with filtering (Auth)
+  app.get('/api/educational-resources', requireAuth, (req, res) => {
+    try {
+      const { resourceType, level, section, classId } = req.query as any;
+      const resources = db.getEducationalResources({
+        resourceType,
+        level,
+        section,
+        classId
+      });
+      res.json(resources);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Student: Get educational resources strictly filtered for current student (level, section, class)
+  app.get('/api/student/educational-resources', requireStudent, (req, res) => {
+    const studentId = (req as any).studentId;
+    try {
+      const { resourceType } = req.query as any;
+      const resources = db.getStudentEducationalResources(studentId, resourceType);
+      res.json(resources);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   // Get courses for a class (available to teacher or student)
   app.get('/api/classes/:classId/courses', requireAuth, (req, res) => {
     try {
-      const courses = db.getCoursesByClass(req.params.classId);
+      const { resourceType } = req.query as any;
+      const courses = db.getCoursesByClass(req.params.classId, resourceType);
       res.json(courses);
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
   });
 
+  // Create educational resource (Teacher only)
+  app.post('/api/teacher/educational-resources', requireTeacher, (req, res) => {
+    const { title, category, description, content, resourceLink, fileUrl, fileName, fileType, fileSize, resourceType, level, section, attachedFiles, classIds, classId } = req.body;
+    if (!title) {
+      return res.status(400).json({ error: 'Le titre est obligatoire' });
+    }
+    const targetClassId = classId || (Array.isArray(classIds) && classIds[0]) || 'all';
+    try {
+      const resource = db.createCourse(targetClassId, {
+        title,
+        category: category || 'Général',
+        description,
+        content: content || '',
+        resourceLink,
+        fileUrl,
+        fileName,
+        fileType,
+        fileSize,
+        resourceType: resourceType || 'cours',
+        level: level || '1',
+        section: section || 'Commun',
+        attachedFiles: Array.isArray(attachedFiles) ? attachedFiles : undefined,
+        classIds: Array.isArray(classIds) ? classIds : undefined
+      });
+      res.status(201).json(resource);
+    } catch (err: any) {
+      res.status(400).json({ error: err.message });
+    }
+  });
+
   // Create course for a class or multiple classes (Teacher only)
   app.post('/api/teacher/classes/:classId/courses', requireTeacher, (req, res) => {
-    const { title, category, description, content, resourceLink, fileUrl, fileName, fileType, fileSize, classIds } = req.body;
+    const { title, category, description, content, resourceLink, fileUrl, fileName, fileType, fileSize, resourceType, level, section, attachedFiles, classIds } = req.body;
     if (!title || !category) {
       return res.status(400).json({ error: 'Titre et catégorie sont obligatoires' });
     }
@@ -712,6 +781,10 @@ async function startServer() {
         fileName,
         fileType,
         fileSize,
+        resourceType: resourceType || 'cours',
+        level: level || '1',
+        section: section || 'Commun',
+        attachedFiles: Array.isArray(attachedFiles) ? attachedFiles : undefined,
         classIds: Array.isArray(classIds) ? classIds : undefined
       });
       res.status(201).json(course);
@@ -720,7 +793,7 @@ async function startServer() {
     }
   });
 
-  // Update course (Teacher only)
+  // Update educational resource or course (Teacher only)
   app.put('/api/teacher/courses/:id', requireTeacher, (req, res) => {
     try {
       const updated = db.updateCourse(req.params.id, req.body);
@@ -730,14 +803,35 @@ async function startServer() {
     }
   });
 
-  // Delete course (Teacher only)
+  app.put('/api/teacher/educational-resources/:id', requireTeacher, (req, res) => {
+    try {
+      const updated = db.updateCourse(req.params.id, req.body);
+      res.json(updated);
+    } catch (err: any) {
+      res.status(400).json({ error: err.message });
+    }
+  });
+
+  // Delete course or educational resource (Teacher only)
   app.delete('/api/teacher/courses/:id', requireTeacher, (req, res) => {
     try {
       const success = db.deleteCourse(req.params.id);
       if (!success) {
-        return res.status(404).json({ error: 'Cours introuvable' });
+        return res.status(404).json({ error: 'Ressource introuvable' });
       }
-      res.json({ success: true, message: 'Cours supprimé' });
+      res.json({ success: true, message: 'Ressource supprimée' });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.delete('/api/teacher/educational-resources/:id', requireTeacher, (req, res) => {
+    try {
+      const success = db.deleteCourse(req.params.id);
+      if (!success) {
+        return res.status(404).json({ error: 'Ressource introuvable' });
+      }
+      res.json({ success: true, message: 'Ressource supprimée' });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
@@ -746,6 +840,28 @@ async function startServer() {
   // ==========================================
   // TESTS DE RAPIDITÉ CLAVIER & ÉVALUATIONS
   // ==========================================
+  // Teacher: Get tests with optional filters (level, section, classId)
+  app.get('/api/teacher/tests-filtered', requireTeacher, (req, res) => {
+    try {
+      const { educationalLevel, section, classId } = req.query as any;
+      const tests = db.getTypingTestsFiltered({ educationalLevel, section, classId });
+      res.json(tests);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Student: Get tests filtered strictly for student's level, section and class
+  app.get('/api/student/tests-filtered', requireStudent, (req, res) => {
+    const studentId = (req as any).studentId;
+    try {
+      const progress = db.getStudentTestsProgressFiltered(studentId);
+      res.json(progress);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   // Get tests for a class
   app.get('/api/classes/:classId/tests', requireAuth, (req, res) => {
     try {
@@ -758,7 +874,7 @@ async function startServer() {
 
   // Create test for a class or multiple classes (Teacher only)
   app.post('/api/teacher/classes/:classId/tests', requireTeacher, (req, res) => {
-    const { title, theme, level, timeLimitSeconds, targetText, minAccuracyPercent, minWpm, description, classIds } = req.body;
+    const { title, theme, level, timeLimitSeconds, targetText, minAccuracyPercent, minWpm, description, educationalLevel, section, classIds } = req.body;
     if (!title || !theme || !level || !timeLimitSeconds || !targetText) {
       return res.status(400).json({ error: 'Champs obligatoires manquants (titre, thème, niveau, temps limite, texte cible)' });
     }
@@ -767,6 +883,8 @@ async function startServer() {
         title,
         theme,
         level: Number(level),
+        educationalLevel: educationalLevel || '1',
+        section: section || 'Commun',
         timeLimitSeconds: Number(timeLimitSeconds),
         targetText,
         minAccuracyPercent: minAccuracyPercent ? Number(minAccuracyPercent) : 80,
@@ -845,9 +963,79 @@ async function startServer() {
     }
   });
 
+  // Get complete class final report (Fiche finale: scores totaux, moyennes frappe, moyennes QCM, historique de toutes les séances et trimestres 1, 2, 3)
+  app.get('/api/teacher/classes/:classId/final-report', requireTeacher, (req, res) => {
+    try {
+      const report = db.getClassFinalReport(req.params.classId);
+      res.json(report);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   // ==========================================
   // QCM (QUESTIONNAIRES & QUIZ)
   // ==========================================
+  // Teacher: get filtered QCMs (by level, section, classId)
+  app.get('/api/teacher/qcms-filtered', requireTeacher, (req, res) => {
+    try {
+      const { level, section, classId } = req.query as any;
+      const qcms = db.getQCMsFiltered({ level, section, classId });
+      res.json(qcms);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Student: Get QCMs strictly filtered for current student (level, section, class)
+  app.get('/api/student/qcms-filtered', requireStudent, (req, res) => {
+    const studentId = (req as any).studentId;
+    try {
+      const progress = db.getStudentQCMsProgressFiltered(studentId);
+      res.json(progress);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Teacher: Get QCM global statistics and question-by-question analysis
+  app.get('/api/teacher/qcm-stats', requireTeacher, (req, res) => {
+    try {
+      const { level, section, classId, qcmId } = req.query as any;
+      const stats = db.getQCMGlobalStats({ level, section, classId, qcmId });
+      res.json(stats);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Student: Get own QCM attempt history
+  app.get('/api/student/qcm-attempts', requireStudent, (req, res) => {
+    const studentId = (req as any).studentId;
+    const { qcmId } = req.query as any;
+    try {
+      const attempts = db.getStudentQCMAttempts(studentId, qcmId);
+      res.json(attempts);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Teacher: Get QCM attempts (by studentId or qcmId)
+  app.get('/api/teacher/qcm-attempts', requireTeacher, (req, res) => {
+    const { studentId, qcmId } = req.query as any;
+    try {
+      if (studentId) {
+        const attempts = db.getStudentQCMAttempts(studentId, qcmId);
+        return res.json(attempts);
+      }
+      const stats = db.getQCMGlobalStats({ qcmId });
+      res.json(stats.attempts);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   // Teacher: get all QCMs (optionally filter by classId query param)
   app.get('/api/teacher/qcms', requireTeacher, (req, res) => {
     try {
@@ -888,7 +1076,7 @@ async function startServer() {
 
   // Create QCM for a class (Teacher only)
   app.post('/api/teacher/classes/:classId/qcms', requireTeacher, (req, res) => {
-    const { title, description, category, durationMinutes, totalPoints, isActive, classIds } = req.body;
+    const { title, description, category, durationMinutes, totalPoints, isActive, level, section, classIds } = req.body;
     if (!title) {
       return res.status(400).json({ error: 'Le titre du QCM est obligatoire' });
     }
@@ -900,6 +1088,8 @@ async function startServer() {
         durationMinutes: durationMinutes !== undefined ? Number(durationMinutes) : 0,
         totalPoints: totalPoints !== undefined ? Number(totalPoints) : 20,
         isActive: isActive !== undefined ? Boolean(isActive) : true,
+        level: level || '1',
+        section: section || 'Commun',
         classIds: Array.isArray(classIds) ? classIds : undefined
       });
       res.status(201).json(qcm);
@@ -910,11 +1100,11 @@ async function startServer() {
 
   // Create QCM fallback endpoint (Teacher only)
   app.post('/api/teacher/qcms', requireTeacher, (req, res) => {
-    const { title, description, category, durationMinutes, totalPoints, isActive, classIds, classId } = req.body;
+    const { title, description, category, durationMinutes, totalPoints, isActive, level, section, classIds, classId } = req.body;
     if (!title) {
       return res.status(400).json({ error: 'Le titre du QCM est obligatoire' });
     }
-    const targetClassId = classId || (Array.isArray(classIds) && classIds[0]) || 'default';
+    const targetClassId = classId || (Array.isArray(classIds) && classIds[0]) || 'all';
     try {
       const qcm = db.createQCM(targetClassId, {
         title,
@@ -923,6 +1113,8 @@ async function startServer() {
         durationMinutes: durationMinutes !== undefined ? Number(durationMinutes) : 0,
         totalPoints: totalPoints !== undefined ? Number(totalPoints) : 20,
         isActive: isActive !== undefined ? Boolean(isActive) : true,
+        level: level || '1',
+        section: section || 'Commun',
         classIds: Array.isArray(classIds) ? classIds : undefined
       });
       res.status(201).json(qcm);

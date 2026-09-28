@@ -1,4 +1,5 @@
 import {
+  AttachedFile,
   ClassGroup,
   Student,
   PublicStudentInfo,
@@ -13,13 +14,16 @@ import {
   QCMSubmission,
   StudentQCMStatus,
   QCMEvaluationSummary,
+  QCMAttempt,
+  QCMGlobalStats,
   AttendanceStatus,
   AttendanceRecord,
   AttendanceSession,
   StudentAttendanceSummary,
   ClassDisciplineStats,
   SessionStatus,
-  StudentTodayAttendance
+  StudentTodayAttendance,
+  ClassFinalReport
 } from './types';
 
 const API_BASE = '/api';
@@ -57,11 +61,11 @@ async function safeFetchJson<T>(
         if (typeof window !== 'undefined') {
           window.dispatchEvent(
             new CustomEvent('intranet:session_expired', {
-              detail: { message: 'Votre session de 30 minutes est expirée. Veuillez vous reconnecter.' }
+              detail: { message: 'Votre session de 1 heure est expirée. Veuillez vous reconnecter.' }
             })
           );
         }
-        throw new Error('Session expirée (durée maximale : 30 minutes). Veuillez vous reconnecter.');
+        throw new Error('Session expirée (durée maximale : 1 heure). Veuillez vous reconnecter.');
       }
       if (res.status === 403) {
         throw new Error('Accès refusé ou privilèges insuffisants.');
@@ -81,11 +85,11 @@ async function safeFetchJson<T>(
       if (typeof window !== 'undefined') {
         window.dispatchEvent(
           new CustomEvent('intranet:session_expired', {
-            detail: { message: payload?.error || 'Votre session de 30 minutes est expirée. Veuillez vous reconnecter.' }
+            detail: { message: payload?.error || 'Votre session de 1 heure est expirée. Veuillez vous reconnecter.' }
           })
         );
       }
-      throw new Error(payload?.error || 'Session expirée (durée maximale : 30 minutes). Veuillez vous reconnecter.');
+      throw new Error(payload?.error || 'Session expirée (durée maximale : 1 heure). Veuillez vous reconnecter.');
     }
     if (res.status === 403) {
       throw new Error(payload?.error || 'Accès refusé pour cette opération.');
@@ -205,6 +209,7 @@ export const api = {
     classData: {
       name: string;
       level: string;
+      section?: string;
       academicYear: string;
       room?: string;
       description?: string;
@@ -221,6 +226,25 @@ export const api = {
         body: JSON.stringify(classData)
       },
       'Erreur lors de la création de la classe'
+    );
+  },
+
+  async teacherUpdateClass(
+    token: string,
+    classId: string,
+    data: Partial<ClassGroup>
+  ): Promise<ClassGroup> {
+    return safeFetchJson<ClassGroup>(
+      `${API_BASE}/teacher/classes/${classId}`,
+      {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`
+        },
+        body: JSON.stringify(data)
+      },
+      'Erreur lors de la modification de la classe'
     );
   },
 
@@ -357,8 +381,103 @@ export const api = {
   },
 
   // ==========================================
-  // COURSES (COURS)
+  // COURSES & EDUCATIONAL RESOURCES (COURS, EXERCICES, EXAMENS)
   // ==========================================
+  async getEducationalResources(
+    token: string,
+    filters?: { resourceType?: string; level?: string; section?: string; classId?: string }
+  ): Promise<Course[]> {
+    const params = new URLSearchParams();
+    if (filters?.resourceType) params.append('resourceType', filters.resourceType);
+    if (filters?.level) params.append('level', filters.level);
+    if (filters?.section) params.append('section', filters.section);
+    if (filters?.classId) params.append('classId', filters.classId);
+    const queryString = params.toString() ? `?${params.toString()}` : '';
+
+    return safeFetchJson<Course[]>(
+      `${API_BASE}/educational-resources${queryString}`,
+      {
+        headers: { Authorization: `Bearer ${token}` }
+      },
+      'Impossible de charger les ressources pédagogiques'
+    );
+  },
+
+  async getStudentEducationalResources(token: string, resourceType?: string): Promise<Course[]> {
+    const query = resourceType ? `?resourceType=${encodeURIComponent(resourceType)}` : '';
+    return safeFetchJson<Course[]>(
+      `${API_BASE}/student/educational-resources${query}`,
+      {
+        headers: { Authorization: `Bearer ${token}` }
+      },
+      'Impossible de charger vos ressources pédagogiques'
+    );
+  },
+
+  async teacherCreateEducationalResource(
+    token: string,
+    data: {
+      title: string;
+      category?: string;
+      description?: string;
+      content: string;
+      resourceLink?: string;
+      resourceType: 'cours' | 'exercice' | 'examen';
+      level: '1' | '2' | '3' | '4';
+      section: 'Lettres' | 'Économie' | 'Sciences' | 'Technique' | 'Mathématiques' | 'Commun' | 'Informatique';
+      attachedFiles?: AttachedFile[];
+      fileUrl?: string;
+      fileName?: string;
+      fileType?: string;
+      fileSize?: number;
+      classIds?: string[];
+      classId?: string;
+    }
+  ): Promise<Course> {
+    return safeFetchJson<Course>(
+      `${API_BASE}/teacher/educational-resources`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`
+        },
+        body: JSON.stringify(data)
+      },
+      'Erreur lors de la création de la ressource'
+    );
+  },
+
+  async teacherUpdateEducationalResource(
+    token: string,
+    id: string,
+    data: Partial<Course> & { classIds?: string[] }
+  ): Promise<Course> {
+    return safeFetchJson<Course>(
+      `${API_BASE}/teacher/educational-resources/${id}`,
+      {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`
+        },
+        body: JSON.stringify(data)
+      },
+      'Erreur lors de la mise à jour de la ressource'
+    );
+  },
+
+  async teacherDeleteEducationalResource(token: string, id: string) {
+    return safeFetchJson(
+      `${API_BASE}/teacher/educational-resources/${id}`,
+      {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${token}` }
+      },
+      'Erreur lors de la suppression de la ressource'
+    );
+  },
+
   async getCourses(token: string, classId: string): Promise<Course[]> {
     return safeFetchJson<Course[]>(
       `${API_BASE}/classes/${classId}/courses`,
@@ -432,6 +551,34 @@ export const api = {
   // ==========================================
   // TESTS DE RAPIDITÉ & ÉVALUATIONS
   // ==========================================
+  async getTypingTestsFiltered(
+    token: string,
+    filters?: { educationalLevel?: string; section?: string; classId?: string }
+  ): Promise<TypingTest[]> {
+    const params = new URLSearchParams();
+    if (filters?.educationalLevel) params.append('educationalLevel', filters.educationalLevel);
+    if (filters?.section) params.append('section', filters.section);
+    if (filters?.classId) params.append('classId', filters.classId);
+    const queryString = params.toString() ? `?${params.toString()}` : '';
+
+    return safeFetchJson<TypingTest[]>(
+      `${API_BASE}/teacher/tests-filtered${queryString}`,
+      {
+        headers: { Authorization: `Bearer ${token}` }
+      },
+      'Impossible de charger les tests de frappe'
+    );
+  },
+
+  async getStudentTestsFiltered(token: string): Promise<StudentTestStatus[]> {
+    return safeFetchJson<StudentTestStatus[]>(
+      `${API_BASE}/student/tests-filtered`,
+      {
+        headers: { Authorization: `Bearer ${token}` }
+      },
+      'Impossible de charger vos tests de frappe'
+    );
+  },
   async getTests(token: string, classId: string): Promise<TypingTest[]> {
     return safeFetchJson<TypingTest[]>(
       `${API_BASE}/classes/${classId}/tests`,
@@ -538,17 +685,102 @@ export const api = {
 
   async getClassEvaluations(token: string, classId: string): Promise<ClassEvaluationsSummary> {
     return safeFetchJson<ClassEvaluationsSummary>(
-      `${API_BASE}/teacher/classes/${classId}/evaluations`,
+       `${API_BASE}/teacher/classes/${classId}/evaluations`,
+       {
+         headers: { Authorization: `Bearer ${token}` }
+       },
+       'Impossible de charger les évaluations de la classe'
+     );
+  },
+
+  async teacherGetClassFinalReport(token: string, classId: string): Promise<ClassFinalReport> {
+    return safeFetchJson<ClassFinalReport>(
+      `${API_BASE}/teacher/classes/${encodeURIComponent(classId)}/final-report`,
       {
         headers: { Authorization: `Bearer ${token}` }
       },
-      'Impossible de charger les évaluations de la classe'
+      'Impossible de charger la fiche finale de la classe'
     );
   },
 
   // ==========================================
   // QCM (QUESTIONNAIRES & QUIZ)
   // ==========================================
+  async getQCMsFiltered(
+    token: string,
+    filters?: { level?: string; section?: string; classId?: string }
+  ): Promise<QCM[]> {
+    const params = new URLSearchParams();
+    if (filters?.level) params.append('level', filters.level);
+    if (filters?.section) params.append('section', filters.section);
+    if (filters?.classId) params.append('classId', filters.classId);
+    const queryString = params.toString() ? `?${params.toString()}` : '';
+
+    return safeFetchJson<QCM[]>(
+      `${API_BASE}/teacher/qcms-filtered${queryString}`,
+      {
+        headers: { Authorization: `Bearer ${token}` }
+      },
+      'Impossible de charger les QCM filtrés'
+    );
+  },
+
+  async getStudentQCMsFiltered(token: string): Promise<StudentQCMStatus[]> {
+    return safeFetchJson<StudentQCMStatus[]>(
+      `${API_BASE}/student/qcms-filtered`,
+      {
+        headers: { Authorization: `Bearer ${token}` }
+      },
+      'Impossible de charger vos QCM'
+    );
+  },
+
+  async getStudentQCMAttempts(token: string, qcmId?: string): Promise<QCMAttempt[]> {
+    const query = qcmId && qcmId !== 'all' ? `?qcmId=${encodeURIComponent(qcmId)}` : '';
+    return safeFetchJson<QCMAttempt[]>(
+      `${API_BASE}/student/qcm-attempts${query}`,
+      {
+        headers: { Authorization: `Bearer ${token}` }
+      },
+      'Impossible de charger l’historique des tentatives de QCM'
+    );
+  },
+
+  async getTeacherQCMAttempts(token: string, studentId?: string, qcmId?: string): Promise<QCMAttempt[]> {
+    const params = new URLSearchParams();
+    if (studentId) params.append('studentId', studentId);
+    if (qcmId && qcmId !== 'all') params.append('qcmId', qcmId);
+    const queryString = params.toString() ? `?${params.toString()}` : '';
+
+    return safeFetchJson<QCMAttempt[]>(
+      `${API_BASE}/teacher/qcm-attempts${queryString}`,
+      {
+        headers: { Authorization: `Bearer ${token}` }
+      },
+      'Impossible de charger l’historique des tentatives'
+    );
+  },
+
+  async getTeacherQCMStats(
+    token: string,
+    filters?: { level?: string; section?: string; classId?: string; qcmId?: string }
+  ): Promise<QCMGlobalStats> {
+    const params = new URLSearchParams();
+    if (filters?.level) params.append('level', filters.level);
+    if (filters?.section) params.append('section', filters.section);
+    if (filters?.classId) params.append('classId', filters.classId);
+    if (filters?.qcmId && filters.qcmId !== 'all') params.append('qcmId', filters.qcmId);
+    const queryString = params.toString() ? `?${params.toString()}` : '';
+
+    return safeFetchJson<QCMGlobalStats>(
+      `${API_BASE}/teacher/qcm-stats${queryString}`,
+      {
+        headers: { Authorization: `Bearer ${token}` }
+      },
+      'Impossible de charger les statistiques des QCM'
+    );
+  },
+
   async getQCMs(token: string, classId: string): Promise<QCM[]> {
     const validClassId = classId && classId.trim() ? encodeURIComponent(classId.trim()) : 'all';
     return safeFetchJson<QCM[]>(
@@ -591,6 +823,8 @@ export const api = {
       durationMinutes?: number;
       totalPoints?: number;
       isActive?: boolean;
+      level?: '1' | '2' | '3' | '4';
+      section?: 'Lettres' | 'Économie' | 'Sciences' | 'Technique' | 'Mathématiques' | 'Commun' | 'Informatique';
       classIds?: string[];
     }
   ): Promise<QCM> {

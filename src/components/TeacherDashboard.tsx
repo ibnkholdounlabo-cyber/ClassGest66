@@ -37,7 +37,9 @@ import {
   SlidersHorizontal,
   Filter,
   X,
-  Pencil
+  Pencil,
+  BarChart3,
+  Layers
 } from 'lucide-react';
 import { api } from '../api';
 import { ClassGroup, Student, TeacherUser } from '../types';
@@ -45,6 +47,8 @@ import { CoursesSection } from './CoursesSection';
 import { TeacherEvaluationsSection } from './TeacherEvaluationsSection';
 import { TeacherQCMSection } from './TeacherQCMSection';
 import { TeacherAttendanceSection } from './TeacherAttendanceSection';
+import { TeacherQCMStatsSection } from './TeacherQCMStatsSection';
+import { TeacherFinalReportSection } from './TeacherFinalReportSection';
 import { ManualModal } from './ManualModal';
 
 interface TeacherDashboardProps {
@@ -70,14 +74,25 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
   const [students, setStudents] = useState<Student[]>([]);
   const [loadingData, setLoadingData] = useState(false);
   const [searchFilter, setSearchFilter] = useState('');
-  const [selectedRubrique, setSelectedRubrique] = useState<'students' | 'courses' | 'tests' | 'qcms' | 'attendance'>('students');
+  const [selectedRubrique, setSelectedRubrique] = useState<'students' | 'courses' | 'tests' | 'qcms' | 'attendance' | 'qcm_stats' | 'final_report'>('students');
 
   // Modals
   const [showNewClassModal, setShowNewClassModal] = useState(false);
   const [newClassName, setNewClassName] = useState('');
-  const [newClassLevel, setNewClassLevel] = useState('Collège');
+  const [newClassLevel, setNewClassLevel] = useState('1');
+  const [newClassSection, setNewClassSection] = useState('Commun');
   const [newClassYear, setNewClassYear] = useState('2024-2025');
   const [newClassRoom, setNewClassRoom] = useState('');
+
+  // Edit class state
+  const [editingClass, setEditingClass] = useState<ClassGroup | null>(null);
+  const [editClassName, setEditClassName] = useState('');
+  const [editClassLevel, setEditClassLevel] = useState('1');
+  const [editClassSection, setEditClassSection] = useState('Commun');
+  const [editClassYear, setEditClassYear] = useState('2024-2025');
+  const [editClassRoom, setEditClassRoom] = useState('');
+  const [editClassDescription, setEditClassDescription] = useState('');
+  const [isSavingClass, setIsSavingClass] = useState(false);
 
   // Class filtering & sorting
   const [classSearch, setClassSearch] = useState('');
@@ -229,6 +244,7 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
       const created = await api.teacherCreateClass(session.token, {
         name: newClassName.trim(),
         level: newClassLevel,
+        section: newClassSection,
         academicYear: newClassYear,
         room: newClassRoom
       });
@@ -240,6 +256,44 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
       setSelectedClassId(created.id);
     } catch (err: any) {
       setActionError(err.message || 'Erreur création classe');
+    }
+  };
+
+  // Open edit class modal
+  const handleOpenEditClassModal = (cls: ClassGroup) => {
+    setEditingClass(cls);
+    setEditClassName(cls.name || '');
+    setEditClassLevel(cls.level || '1');
+    setEditClassSection(cls.section || 'Commun');
+    setEditClassYear(cls.academicYear || '2024-2025');
+    setEditClassRoom(cls.room || '');
+    setEditClassDescription(cls.description || '');
+  };
+
+  // Update existing class
+  const handleUpdateClass = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!session || !editingClass || !editClassName.trim()) return;
+    setIsSavingClass(true);
+    try {
+      const updated = await api.teacherUpdateClass(session.token, editingClass.id, {
+        name: editClassName.trim(),
+        level: editClassLevel.trim() || '1',
+        section: editClassSection.trim() || 'Commun',
+        academicYear: editClassYear.trim() || '2024-2025',
+        room: editClassRoom.trim(),
+        description: editClassDescription.trim()
+      });
+      setClasses(prev => prev.map(c => (c.id === updated.id ? { ...c, ...updated } : c)));
+      setEditingClass(null);
+      setActionSuccess(`Informations de la classe "${updated.name}" mises à jour avec succès !`);
+      await loadTeacherClasses();
+      setTimeout(() => setActionSuccess(''), 4000);
+    } catch (err: any) {
+      setActionError(err.message || 'Erreur lors de la modification de la classe');
+      setTimeout(() => setActionError(''), 4000);
+    } finally {
+      setIsSavingClass(false);
     }
   };
 
@@ -804,6 +858,17 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
               )}
 
               <button
+                id="btn-open-edit-class-top"
+                type="button"
+                onClick={() => handleOpenEditClassModal(selectedClass)}
+                className="inline-flex items-center gap-2 px-3.5 py-2 rounded-xl bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200 text-xs font-semibold shadow-sm transition-colors cursor-pointer"
+                title="Modifier les informations de la classe (Nom, Niveau, Section, Année, Salle...)"
+              >
+                <Pencil className="w-4 h-4 text-amber-600" />
+                <span>Modifier la classe</span>
+              </button>
+
+              <button
                 id="btn-open-delete-class-top"
                 type="button"
                 onClick={() => setClassToDelete({ id: selectedClass.id, name: selectedClass.name, studentCount: students.length })}
@@ -864,24 +929,44 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
             </div>
           ) : (
             filteredClasses.map(cls => (
-              <button
+              <div
                 key={cls.id}
-                onClick={() => setSelectedClassId(cls.id)}
-                className={`px-4 py-2.5 rounded-2xl text-xs font-bold transition-all flex items-center gap-2 whitespace-nowrap cursor-pointer border ${
+                className={`group px-3.5 py-2 rounded-2xl text-xs font-bold transition-all flex items-center gap-2 whitespace-nowrap border ${
                   selectedClassId === cls.id
                     ? 'bg-indigo-600 text-white border-indigo-600 shadow-md shadow-indigo-500/20'
                     : 'bg-white text-slate-700 hover:bg-slate-50 border-slate-200'
                 }`}
               >
-                <span>{cls.name}</span>
-                <span
-                  className={`px-1.5 py-0.5 rounded-full text-[10px] ${
-                    selectedClassId === cls.id ? 'bg-indigo-800/60 text-white' : 'bg-slate-100 text-slate-600'
-                  }`}
+                <button
+                  type="button"
+                  onClick={() => setSelectedClassId(cls.id)}
+                  className="flex items-center gap-2 cursor-pointer focus:outline-none"
                 >
-                  {cls.studentCount}
-                </span>
-              </button>
+                  <span>{cls.name}</span>
+                  <span
+                    className={`px-1.5 py-0.5 rounded-full text-[10px] ${
+                      selectedClassId === cls.id ? 'bg-indigo-800/60 text-white' : 'bg-slate-100 text-slate-600'
+                    }`}
+                  >
+                    {cls.studentCount}
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    handleOpenEditClassModal(cls);
+                  }}
+                  className={`p-1 rounded-lg transition-colors cursor-pointer ${
+                    selectedClassId === cls.id
+                      ? 'text-indigo-200 hover:text-white hover:bg-indigo-700'
+                      : 'text-slate-400 hover:text-indigo-600 hover:bg-indigo-50'
+                  }`}
+                  title={`Modifier les informations de la classe ${cls.name}`}
+                >
+                  <Pencil className="w-3 h-3" />
+                </button>
+              </div>
             ))
           )}
         </div>
@@ -893,14 +978,19 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
           {/* Header of selected class */}
           <div className="p-6 bg-slate-50/70 border-b border-slate-200 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
             <div>
-              <div className="flex items-center gap-3">
+              <div className="flex items-center gap-3 flex-wrap">
                 <h2 className="text-xl font-bold text-slate-900">{selectedClass.name}</h2>
-                <span className="text-xs text-slate-500 font-medium px-2.5 py-0.5 bg-white rounded-full border border-slate-200">
-                  {selectedClass.level} • {selectedClass.academicYear}
+                <span className="text-xs text-slate-600 font-medium px-2.5 py-0.5 bg-white rounded-full border border-slate-200">
+                  Niveau {selectedClass.level}{selectedClass.section ? ` • ${selectedClass.section}` : ''} • {selectedClass.academicYear}
                 </span>
                 {selectedClass.room && (
-                  <span className="text-xs text-slate-500 font-medium px-2 py-0.5 bg-white rounded-full border border-slate-200">
-                    {selectedClass.room}
+                  <span className="text-xs text-slate-600 font-medium px-2.5 py-0.5 bg-white rounded-full border border-slate-200">
+                    Salle {selectedClass.room}
+                  </span>
+                )}
+                {selectedClass.description && (
+                  <span className="text-xs text-slate-400 italic">
+                    {selectedClass.description}
                   </span>
                 )}
               </div>
@@ -922,6 +1012,17 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
                   className="h-9 pl-9 pr-3 text-xs bg-white border border-slate-300 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:outline-none w-44 sm:w-56"
                 />
               </div>
+
+              <button
+                id="btn-edit-class-header"
+                type="button"
+                onClick={() => handleOpenEditClassModal(selectedClass)}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-amber-800 hover:text-amber-900 bg-amber-50 hover:bg-amber-100 rounded-xl border border-amber-200 transition-colors cursor-pointer"
+                title="Modifier les informations de la classe"
+              >
+                <Pencil className="w-3.5 h-3.5 text-amber-600" />
+                <span className="hidden sm:inline">Modifier</span>
+              </button>
 
               <button
                 id="btn-delete-class"
@@ -1001,6 +1102,38 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
             >
               <Calendar className="w-4 h-4" />
               <span>Présences & Appel</span>
+            </button>
+
+            <button
+              id="tab-teacher-qcm-stats"
+              onClick={() => setSelectedRubrique('qcm_stats')}
+              className={`pb-3 px-3 text-xs font-bold transition-all border-b-2 flex items-center gap-2 cursor-pointer whitespace-nowrap ${
+                selectedRubrique === 'qcm_stats'
+                  ? 'border-indigo-600 text-indigo-600'
+                  : 'border-transparent text-slate-500 hover:text-slate-800'
+              }`}
+            >
+              <BarChart3 className="w-4 h-4" />
+              <span>Statistiques des QCM</span>
+              <span className="px-1.5 py-0.5 rounded-full text-[10px] bg-indigo-100 text-indigo-700 font-bold">
+                Taux & Questions
+              </span>
+            </button>
+
+            <button
+              id="tab-teacher-final-report"
+              onClick={() => setSelectedRubrique('final_report')}
+              className={`pb-3 px-3 text-xs font-bold transition-all border-b-2 flex items-center gap-2 cursor-pointer whitespace-nowrap ${
+                selectedRubrique === 'final_report'
+                  ? 'border-indigo-600 text-indigo-600'
+                  : 'border-transparent text-slate-500 hover:text-slate-800'
+              }`}
+            >
+              <FileSpreadsheet className="w-4 h-4 text-emerald-600" />
+              <span>Fiche Finale & Bilan</span>
+              <span className="px-1.5 py-0.5 rounded-full text-[10px] bg-emerald-100 text-emerald-800 font-bold">
+                Trimestres & Exports
+              </span>
             </button>
           </div>
 
@@ -1385,19 +1518,77 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
               />
             </div>
           )}
+
+          {/* Rubrique QCM Statistics & History */}
+          {selectedRubrique === 'qcm_stats' && (
+            <div className="p-6">
+              <TeacherQCMStatsSection
+                token={session!.token}
+                classes={classes}
+              />
+            </div>
+          )}
+
+          {/* Rubrique Fiche Finale & Bilan Trimestriel */}
+          {selectedRubrique === 'final_report' && (
+            <div className="p-6">
+              <TeacherFinalReportSection
+                classId={selectedClass.id}
+                className={selectedClass.name}
+                token={session!.token}
+                classes={classes}
+              />
+            </div>
+          )}
         </div>
       ) : (
-        <div className="bg-white rounded-3xl p-12 text-center border border-slate-200">
-          <School className="w-12 h-12 text-slate-300 mx-auto mb-3" />
-          <h2 className="text-lg font-bold text-slate-800">Aucune classe sélectionnée</h2>
-          <p className="text-xs text-slate-500 mb-4">Créez votre première classe pour commencer à gérer les élèves.</p>
-          <button
-            type="button"
-            onClick={() => setShowNewClassModal(true)}
-            className="px-4 py-2 bg-indigo-600 text-white rounded-xl text-xs font-semibold"
-          >
-            Créer une classe
-          </button>
+        <div className="space-y-6">
+          {/* Even if no class selected, allow teacher to browse stats or create class */}
+          <div className="bg-white rounded-3xl p-4 border border-slate-200 shadow-sm flex items-center justify-between gap-4">
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => setSelectedRubrique('qcm_stats')}
+                className={`px-4 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center gap-2 ${
+                  selectedRubrique === 'qcm_stats'
+                    ? 'bg-indigo-600 text-white'
+                    : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+                }`}
+              >
+                <BarChart3 className="w-4 h-4" />
+                <span>Statistiques des QCM</span>
+              </button>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => setShowNewClassModal(true)}
+              className="px-4 py-2 bg-slate-900 text-white rounded-xl text-xs font-semibold cursor-pointer"
+            >
+              + Créer une classe
+            </button>
+          </div>
+
+          {selectedRubrique === 'qcm_stats' ? (
+            <div className="bg-white rounded-3xl p-6 border border-slate-200 shadow-sm">
+              <TeacherQCMStatsSection
+                token={session!.token}
+                classes={classes}
+              />
+            </div>
+          ) : (
+            <div className="bg-white rounded-3xl p-12 text-center border border-slate-200">
+              <School className="w-12 h-12 text-slate-300 mx-auto mb-3" />
+              <h2 className="text-lg font-bold text-slate-800">Aucune classe sélectionnée</h2>
+              <p className="text-xs text-slate-500 mb-4">Créez votre première classe pour commencer à gérer les élèves.</p>
+              <button
+                type="button"
+                onClick={() => setShowNewClassModal(true)}
+                className="px-4 py-2 bg-indigo-600 text-white rounded-xl text-xs font-semibold"
+              >
+                Créer une classe
+              </button>
+            </div>
+          )}
         </div>
       )}
 
@@ -1428,14 +1619,39 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="block font-semibold text-slate-700 mb-1">Niveau</label>
-                  <input
-                    type="text"
+                  <select
                     value={newClassLevel}
                     onChange={e => setNewClassLevel(e.target.value)}
-                    placeholder="Ex: Collège"
-                    className="w-full h-10 px-3 bg-slate-50 border border-slate-300 rounded-xl text-sm focus:ring-2 focus:ring-indigo-500"
-                  />
+                    className="w-full h-10 px-3 bg-slate-50 border border-slate-300 rounded-xl text-xs font-medium focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+                  >
+                    <option value="1">1ère Année (Niveau 1)</option>
+                    <option value="2">2ème Année (Niveau 2)</option>
+                    <option value="3">3ème Année (Niveau 3)</option>
+                    <option value="4">4ème Année (Niveau 4)</option>
+                    <option value="Collège">Collège</option>
+                    <option value="Lycée">Lycée</option>
+                    <option value="Général">Général</option>
+                  </select>
                 </div>
+                <div>
+                  <label className="block font-semibold text-slate-700 mb-1">Section</label>
+                  <select
+                    value={newClassSection}
+                    onChange={e => setNewClassSection(e.target.value)}
+                    className="w-full h-10 px-3 bg-slate-50 border border-slate-300 rounded-xl text-xs font-medium focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+                  >
+                    <option value="Commun">Tronc Commun</option>
+                    <option value="Informatique">Informatique</option>
+                    <option value="Sciences">Sciences</option>
+                    <option value="Technique">Technique</option>
+                    <option value="Mathématiques">Mathématiques</option>
+                    <option value="Économie">Économie</option>
+                    <option value="Lettres">Lettres</option>
+                  </select>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="block font-semibold text-slate-700 mb-1">Année scolaire</label>
                   <input
@@ -1446,32 +1662,162 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
                     className="w-full h-10 px-3 bg-slate-50 border border-slate-300 rounded-xl text-sm focus:ring-2 focus:ring-indigo-500"
                   />
                 </div>
-              </div>
-
-              <div>
-                <label className="block font-semibold text-slate-700 mb-1">Salle principale (optionnel)</label>
-                <input
-                  type="text"
-                  placeholder="Ex: Salle 104"
-                  value={newClassRoom}
-                  onChange={e => setNewClassRoom(e.target.value)}
-                  className="w-full h-10 px-3 bg-slate-50 border border-slate-300 rounded-xl text-sm focus:ring-2 focus:ring-indigo-500"
-                />
+                <div>
+                  <label className="block font-semibold text-slate-700 mb-1">Salle principale (optionnel)</label>
+                  <input
+                    type="text"
+                    placeholder="Ex: Salle 104"
+                    value={newClassRoom}
+                    onChange={e => setNewClassRoom(e.target.value)}
+                    className="w-full h-10 px-3 bg-slate-50 border border-slate-300 rounded-xl text-sm focus:ring-2 focus:ring-indigo-500"
+                  />
+                </div>
               </div>
 
               <div className="pt-2 flex justify-end gap-2">
                 <button
                   type="button"
                   onClick={() => setShowNewClassModal(false)}
-                  className="px-4 py-2 text-slate-600 hover:text-slate-800 font-medium"
+                  className="px-4 py-2 text-slate-600 hover:text-slate-800 font-medium cursor-pointer"
                 >
                   Annuler
                 </button>
                 <button
                   type="submit"
-                  className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold rounded-xl"
+                  className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold rounded-xl cursor-pointer"
                 >
                   Créer la classe
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL: MODIFIER LA CLASSE */}
+      {editingClass && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4">
+          <div className="bg-white rounded-3xl shadow-2xl max-w-lg w-full border border-slate-200 overflow-hidden animate-in fade-in zoom-in-95 duration-150">
+            <div className="p-6 bg-slate-900 text-white flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-2xl bg-amber-500/20 border border-amber-400/30 flex items-center justify-center text-amber-400">
+                  <Pencil className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-base">Modifier la classe</h3>
+                  <p className="text-xs text-slate-400">{editingClass.name}</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setEditingClass(null)}
+                className="text-slate-400 hover:text-white transition-colors cursor-pointer text-lg leading-none p-1"
+              >
+                ✕
+              </button>
+            </div>
+
+            <form onSubmit={handleUpdateClass} className="p-6 space-y-4 text-xs">
+              <div>
+                <label className="block font-semibold text-slate-700 mb-1">
+                  Nom de la classe <span className="text-rose-500">*</span>
+                </label>
+                <input
+                  type="text"
+                  required
+                  placeholder="Ex: 2ème Sciences 1, 4ème Info, 6ème B..."
+                  value={editClassName}
+                  onChange={e => setEditClassName(e.target.value)}
+                  className="w-full h-10 px-3 bg-slate-50 border border-slate-300 rounded-xl text-sm font-medium focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block font-semibold text-slate-700 mb-1">Niveau</label>
+                  <select
+                    value={editClassLevel}
+                    onChange={e => setEditClassLevel(e.target.value)}
+                    className="w-full h-10 px-3 bg-slate-50 border border-slate-300 rounded-xl text-xs font-medium focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+                  >
+                    <option value="1">1ère Année (Niveau 1)</option>
+                    <option value="2">2ème Année (Niveau 2)</option>
+                    <option value="3">3ème Année (Niveau 3)</option>
+                    <option value="4">4ème Année (Niveau 4)</option>
+                    <option value="Collège">Collège</option>
+                    <option value="Lycée">Lycée</option>
+                    <option value="Général">Général</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block font-semibold text-slate-700 mb-1">Section</label>
+                  <select
+                    value={editClassSection}
+                    onChange={e => setEditClassSection(e.target.value)}
+                    className="w-full h-10 px-3 bg-slate-50 border border-slate-300 rounded-xl text-xs font-medium focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+                  >
+                    <option value="Commun">Tronc Commun</option>
+                    <option value="Informatique">Informatique</option>
+                    <option value="Sciences">Sciences</option>
+                    <option value="Technique">Technique</option>
+                    <option value="Mathématiques">Mathématiques</option>
+                    <option value="Économie">Économie</option>
+                    <option value="Lettres">Lettres</option>
+                  </select>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block font-semibold text-slate-700 mb-1">Année scolaire</label>
+                  <input
+                    type="text"
+                    value={editClassYear}
+                    onChange={e => setEditClassYear(e.target.value)}
+                    placeholder="2024-2025"
+                    className="w-full h-10 px-3 bg-slate-50 border border-slate-300 rounded-xl text-xs font-medium focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+                  />
+                </div>
+
+                <div>
+                  <label className="block font-semibold text-slate-700 mb-1">Salle / Laboratoire (optionnel)</label>
+                  <input
+                    type="text"
+                    placeholder="Ex: Labo Info 1"
+                    value={editClassRoom}
+                    onChange={e => setEditClassRoom(e.target.value)}
+                    className="w-full h-10 px-3 bg-slate-50 border border-slate-300 rounded-xl text-xs font-medium focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block font-semibold text-slate-700 mb-1">Description / Notes (optionnel)</label>
+                <textarea
+                  rows={2}
+                  placeholder="Notes internes, groupe A, planning..."
+                  value={editClassDescription}
+                  onChange={e => setEditClassDescription(e.target.value)}
+                  className="w-full p-3 bg-slate-50 border border-slate-300 rounded-xl text-xs focus:ring-2 focus:ring-indigo-500 focus:outline-none resize-none"
+                />
+              </div>
+
+              <div className="pt-3 border-t border-slate-100 flex items-center justify-between gap-3">
+                <button
+                  type="button"
+                  onClick={() => setEditingClass(null)}
+                  className="px-4 py-2.5 rounded-xl border border-slate-300 text-slate-700 hover:bg-slate-50 font-semibold cursor-pointer transition-colors"
+                >
+                  Annuler
+                </button>
+                <button
+                  type="submit"
+                  disabled={isSavingClass}
+                  className="px-5 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-semibold flex items-center gap-2 cursor-pointer shadow-sm transition-colors disabled:opacity-50"
+                >
+                  {isSavingClass && <RefreshCw className="w-3.5 h-3.5 animate-spin" />}
+                  <span>Enregistrer les modifications</span>
                 </button>
               </div>
             </form>

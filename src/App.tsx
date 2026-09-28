@@ -7,7 +7,7 @@ import { TeacherDashboard } from './components/TeacherDashboard';
 import { Student, TeacherUser, ClassGroup, AuthStudentSession, AuthTeacherSession } from './types';
 import { School, AlertTriangle, X } from 'lucide-react';
 
-const STUDENT_SESSION_DURATION_MS = 30 * 60 * 1000; // Limite stricte de 30 minutes pour les élèves
+const STUDENT_SESSION_DURATION_MS = 60 * 60 * 1000; // Limite de 1 heure (60 minutes) pour les élèves
 const TEACHER_SESSION_DURATION_MS = 4 * 60 * 60 * 1000; // Durée de session professeur : 4 heures (240 minutes)
 
 export default function App() {
@@ -100,12 +100,12 @@ export default function App() {
     navigate('/prof');
   }, []);
 
-  // Déconnexion automatique après expiration (30 min pour élève, 4 heures pour enseignant)
+  // Déconnexion automatique après expiration (1 heure pour élève, 4 heures pour enseignant)
   useEffect(() => {
     const checkExpiration = () => {
       const now = Date.now();
       if (studentSession?.expiresAt && now >= studentSession.expiresAt) {
-        handleStudentLogout('Votre session élève de 30 minutes a expiré. Pour des raisons de sécurité, veuillez vous reconnecter.');
+        handleStudentLogout('Votre session élève de 1 heure a expiré. Pour des raisons de sécurité, veuillez vous reconnecter.');
       } else if (teacherSession?.expiresAt && now >= teacherSession.expiresAt) {
         handleTeacherLogout('Votre session professeur de 4 heures est arrivée à échéance. Veuillez vous reconnecter.');
       }
@@ -196,7 +196,7 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-slate-100 flex flex-col font-sans text-slate-800 selection:bg-indigo-500 selection:text-white">
-      {/* Intranet Navigation Header avec compte à rebours 30 min */}
+      {/* Intranet Navigation Header avec compte à rebours 1 heure */}
       <Header
         currentView={computedHeaderView}
         currentPath={currentPath}
@@ -209,7 +209,7 @@ export default function App() {
         onNavigateToProf={() => navigate('/prof')}
       />
 
-      {/* Notification d'expiration de session (30 min) */}
+      {/* Notification d'expiration de session (1 heure) */}
       {expiredNotice && (
         <div className="bg-amber-500 text-slate-950 px-4 py-3 shadow-md transition-all">
           <div className="max-w-7xl mx-auto flex items-center justify-between gap-3 text-sm font-medium">
@@ -267,7 +267,7 @@ export default function App() {
             <School className="w-4 h-4 text-indigo-400" />
             <span className="font-semibold text-slate-300">Intranet Scolaire des Établissements</span>
             <span className="text-slate-600">•</span>
-            <span>Réseau local sécurisé (Sessions 30 min)</span>
+            <span>Réseau local sécurisé (Sessions 1 heure)</span>
           </div>
 
           <div className="flex items-center gap-4 text-slate-500">

@@ -38,7 +38,8 @@ import {
   Minimize2,
   RefreshCw,
   Radio,
-  Eye
+  Eye,
+  HelpCircle
 } from 'lucide-react';
 import { api } from '../api';
 import {
@@ -159,11 +160,14 @@ export const TeacherAttendanceSection: React.FC<TeacherAttendanceSectionProps> =
   }>>({});
   const [savingRecords, setSavingRecords] = useState(false);
   const [saveSuccessMessage, setSaveSuccessMessage] = useState('');
+  const [showSessionQCMStats, setShowSessionQCMStats] = useState(false);
+  const [showSessionFiles, setShowSessionFiles] = useState(false);
 
   // Roll call filters
   const [rollSearch, setRollSearch] = useState('');
   const [rollStatusFilter, setRollStatusFilter] = useState<'all' | AttendanceStatus>('all');
   const [rollRepeatingFilter, setRollRepeatingFilter] = useState<'all' | 'nouveau' | 'redoublant'>('all');
+  const [rollFileFilter, setRollFileFilter] = useState<'all' | 'with-file' | 'no-file'>('all');
   const [rollSort, setRollSort] = useState<'order' | 'name-asc' | 'status'>('order');
 
   // New Session Modal
@@ -506,6 +510,9 @@ export const TeacherAttendanceSection: React.FC<TeacherAttendanceSectionProps> =
         if (rollRepeatingFilter === 'nouveau' && rec.isRepeating) return false;
         if (rollRepeatingFilter === 'redoublant' && !rec.isRepeating) return false;
 
+        if (rollFileFilter === 'with-file' && !rec.activityFileUrl) return false;
+        if (rollFileFilter === 'no-file' && Boolean(rec.activityFileUrl)) return false;
+
         if (rollSearch) {
           const q = rollSearch.toLowerCase();
           const matchName = (rec.studentName || '').toLowerCase().includes(q);
@@ -528,7 +535,7 @@ export const TeacherAttendanceSection: React.FC<TeacherAttendanceSectionProps> =
         }
         return 0; // initial order
       });
-  }, [currentSession, recordEdits, rollStatusFilter, rollRepeatingFilter, rollSearch, rollSort]);
+  }, [currentSession, recordEdits, rollStatusFilter, rollRepeatingFilter, rollFileFilter, rollSearch, rollSort]);
 
   // Filter & Sort Summary
   const filteredSummaries = useMemo(() => {
@@ -925,6 +932,168 @@ export const TeacherAttendanceSection: React.FC<TeacherAttendanceSectionProps> =
                   </div>
                 )}
 
+                {/* Session QCM Statistics & Results Section */}
+                <div className="p-3.5 bg-gradient-to-r from-purple-50/80 to-indigo-50/80 border-b border-purple-200 text-xs">
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div className="flex items-center gap-3">
+                      <div className="w-8 h-8 rounded-lg bg-purple-600 text-white flex items-center justify-center font-bold text-xs shadow-sm shadow-purple-500/20">
+                        <HelpCircle className="w-4 h-4" />
+                      </div>
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <h4 className="font-bold text-slate-800 text-xs">Résultats & Statistiques QCM de la séance</h4>
+                          <span className="px-2 py-0.5 rounded-full bg-purple-100 text-purple-700 text-[10px] font-bold border border-purple-200">
+                            {currentSession.qcmStats?.totalAttempts || 0} tentative{(currentSession.qcmStats?.totalAttempts || 0) > 1 ? 's' : ''}
+                          </span>
+                        </div>
+                        <p className="text-[11px] text-slate-500">
+                          {currentSession.qcmStats && currentSession.qcmStats.totalAttempts > 0
+                            ? `Moyenne : ${currentSession.qcmStats.averageScore20}/20 | Taux de réussite : ${currentSession.qcmStats.successRate}% | Admis (>=10/20) : ${currentSession.qcmStats.passedCount}/${currentSession.qcmStats.totalAttempts}`
+                            : 'Aucune tentative de QCM enregistrée pour la date de cette séance'}
+                        </p>
+                      </div>
+                    </div>
+
+                    {currentSession.qcmStats && currentSession.qcmStats.totalAttempts > 0 && (
+                      <button
+                        type="button"
+                        onClick={() => setShowSessionQCMStats(!showSessionQCMStats)}
+                        className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white hover:bg-purple-100 text-purple-700 font-semibold border border-purple-200 text-[11px] shadow-sm transition-all cursor-pointer"
+                      >
+                        <Eye className="w-3.5 h-3.5" />
+                        <span>{showSessionQCMStats ? 'Masquer détails QCM' : 'Voir les notes QCM'}</span>
+                      </button>
+                    )}
+                  </div>
+
+                  {/* Expanded Session QCM Attempt List */}
+                  {showSessionQCMStats && currentSession.qcmStats && currentSession.qcmStats.attempts.length > 0 && (
+                    <div className="mt-3 pt-3 border-t border-purple-200/80 overflow-x-auto">
+                      <table className="w-full text-left text-xs bg-white rounded-lg border border-purple-100 shadow-sm overflow-hidden">
+                        <thead className="bg-purple-100/60 text-purple-900 font-semibold text-[11px]">
+                          <tr>
+                            <th className="py-2 px-3">Élève</th>
+                            <th className="py-2 px-3">QCM</th>
+                            <th className="py-2 px-3 text-center">Score /20</th>
+                            <th className="py-2 px-3 text-center">Réponses correctes</th>
+                            <th className="py-2 px-3 text-center">Taux</th>
+                            <th className="py-2 px-3 text-center">Durée</th>
+                            <th className="py-2 px-3 text-right">Heure</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-purple-50">
+                          {currentSession.qcmStats.attempts.map((att) => (
+                            <tr key={att.id} className="hover:bg-purple-50/40 transition-colors">
+                              <td className="py-2 px-3 font-semibold text-slate-800">
+                                {att.studentName}
+                              </td>
+                              <td className="py-2 px-3 text-slate-600">
+                                {att.qcmTitle}
+                              </td>
+                              <td className="py-2 px-3 text-center font-bold">
+                                <span className={`px-2 py-0.5 rounded text-[11px] font-bold ${
+                                  att.score20 >= 10 ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' : 'bg-rose-50 text-rose-700 border border-rose-200'
+                                }`}>
+                                  {att.score20}/20
+                                </span>
+                              </td>
+                              <td className="py-2 px-3 text-center text-slate-600">
+                                <span className="font-semibold text-emerald-700">{att.correctCount}</span> / {att.totalQuestions}
+                              </td>
+                              <td className="py-2 px-3 text-center">
+                                <span className="font-semibold text-slate-700">{att.successRate}%</span>
+                              </td>
+                              <td className="py-2 px-3 text-center text-slate-500">
+                                {Math.floor(att.timeSpentSeconds / 60)}m {att.timeSpentSeconds % 60}s
+                              </td>
+                              <td className="py-2 px-3 text-right text-slate-400 text-[11px]">
+                                {new Date(att.completedAt).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </div>
+
+                {/* Session Student Attached Files Section */}
+                {(() => {
+                  const sessionFiles = currentSession.records.filter(r => Boolean(r.activityFileUrl));
+                  return (
+                    <div className="p-3.5 bg-gradient-to-r from-indigo-50/90 to-sky-50/90 border-b border-indigo-200 text-xs">
+                      <div className="flex flex-wrap items-center justify-between gap-3">
+                        <div className="flex items-center gap-3">
+                          <div className="w-8 h-8 rounded-lg bg-indigo-600 text-white flex items-center justify-center font-bold text-xs shadow-sm shadow-indigo-500/20">
+                            <Paperclip className="w-4 h-4" />
+                          </div>
+                          <div>
+                            <div className="flex items-center gap-2">
+                              <h4 className="font-bold text-slate-800 text-xs">Fichiers d'activité déposés par les élèves</h4>
+                              <span className="px-2 py-0.5 rounded-full bg-indigo-100 text-indigo-800 text-[10px] font-bold border border-indigo-200">
+                                {sessionFiles.length} / {currentSession.records.length} élève{sessionFiles.length > 1 ? 's' : ''}
+                              </span>
+                            </div>
+                            <p className="text-[11px] text-slate-500">
+                              {sessionFiles.length > 0
+                                ? `${sessionFiles.length} élève(s) ont remis leur fichier de travail pour cette séance`
+                                : "Aucun fichier d'activité n'a encore été déposé par les élèves pour cette séance."}
+                            </p>
+                          </div>
+                        </div>
+
+                        {sessionFiles.length > 0 && (
+                          <button
+                            type="button"
+                            onClick={() => setShowSessionFiles(!showSessionFiles)}
+                            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white hover:bg-indigo-100 text-indigo-700 font-semibold border border-indigo-200 text-[11px] shadow-sm transition-all cursor-pointer"
+                          >
+                            <FileText className="w-3.5 h-3.5" />
+                            <span>{showSessionFiles ? 'Masquer la liste des fichiers' : `Voir les ${sessionFiles.length} fichier(s)`}</span>
+                          </button>
+                        )}
+                      </div>
+
+                      {/* Expanded Session Files List */}
+                      {showSessionFiles && sessionFiles.length > 0 && (
+                        <div className="mt-3 pt-3 border-t border-indigo-200/80">
+                          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2.5">
+                            {sessionFiles.map(rec => (
+                              <div
+                                key={rec.studentId}
+                                className="p-3 bg-white rounded-xl border border-indigo-100 shadow-xs flex items-center justify-between gap-2"
+                              >
+                                <div className="min-w-0 flex-1">
+                                  <span className="font-bold text-slate-900 block truncate text-xs">{rec.studentName}</span>
+                                  <p className="text-[11px] text-indigo-700 truncate font-mono mt-0.5 flex items-center gap-1">
+                                    <Paperclip className="w-3 h-3 shrink-0" />
+                                    <span className="truncate">{rec.activityFileName || 'fichier'}</span>
+                                  </p>
+                                  <span className="text-[10px] text-slate-400">
+                                    {rec.activityFileSize ? `${Math.round(rec.activityFileSize / 1024)} Ko • ` : ''}
+                                    {rec.activityUploadedAt ? new Date(rec.activityUploadedAt).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' }) : ''}
+                                  </span>
+                                </div>
+                                <a
+                                  href={rec.activityFileUrl}
+                                  download={rec.activityFileName || 'activite'}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="px-2.5 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs font-bold shrink-0 flex items-center gap-1 transition-colors"
+                                  title="Télécharger le fichier"
+                                >
+                                  <Download className="w-3 h-3" />
+                                  <span>Télécharger</span>
+                                </a>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })()}
+
                 {/* Batch Actions Toolbar */}
                 <div className="p-3 bg-white border-b border-slate-200 flex flex-wrap items-center justify-between gap-3 text-xs">
                   <div className="flex items-center gap-1.5">
@@ -979,6 +1148,16 @@ export const TeacherAttendanceSection: React.FC<TeacherAttendanceSectionProps> =
                       <option value="nouveau">Nouveaux</option>
                       <option value="redoublant">Redoublants</option>
                     </select>
+
+                    <select
+                      value={rollFileFilter}
+                      onChange={(e) => setRollFileFilter(e.target.value as any)}
+                      className="h-7 px-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-medium text-slate-700"
+                    >
+                      <option value="all">Tous fichiers ({currentSession.records.length})</option>
+                      <option value="with-file">Avec fichier joint ({currentSession.records.filter(r => Boolean(r.activityFileUrl)).length})</option>
+                      <option value="no-file">Sans fichier ({currentSession.records.filter(r => !r.activityFileUrl).length})</option>
+                    </select>
                   </div>
                 </div>
 
@@ -1005,6 +1184,7 @@ export const TeacherAttendanceSection: React.FC<TeacherAttendanceSectionProps> =
                           <th className="py-2.5 px-2 min-w-[150px]">Discipline / Bonus</th>
                           <th className="py-2.5 px-2 text-center w-20">Score</th>
                           <th className="py-2.5 px-2 min-w-[130px]">Observations</th>
+                          <th className="py-2.5 px-2 text-center min-w-[140px]" title="Fichier d'activité remis par l'élève pour la séance">Fichier d'activité</th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-100 bg-white">
@@ -1298,6 +1478,26 @@ export const TeacherAttendanceSection: React.FC<TeacherAttendanceSectionProps> =
                                   placeholder="Observations..."
                                   className="w-full text-xs px-2.5 py-1 bg-slate-50 focus:bg-white border border-slate-200 focus:border-indigo-500 rounded-lg focus:ring-1 focus:ring-indigo-500 text-slate-700 transition-colors"
                                 />
+                              </td>
+
+                              {/* 9. Fichier d'activité joint */}
+                              <td className="py-2.5 px-2 text-center">
+                                {rec.activityFileUrl ? (
+                                  <a
+                                    href={rec.activityFileUrl}
+                                    download={rec.activityFileName || 'activite'}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-bold border border-indigo-200 text-xs transition-colors"
+                                    title={`Télécharger : ${rec.activityFileName || 'fichier'}`}
+                                  >
+                                    <Paperclip className="w-3.5 h-3.5 text-indigo-600" />
+                                    <span className="truncate max-w-[110px]">{rec.activityFileName || 'Fichier'}</span>
+                                    <Download className="w-3 h-3 text-indigo-500" />
+                                  </a>
+                                ) : (
+                                  <span className="text-slate-400 text-[11px] italic">Aucun fichier</span>
+                                )}
                               </td>
                             </tr>
                           );

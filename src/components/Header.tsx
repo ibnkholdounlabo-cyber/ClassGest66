@@ -85,7 +85,7 @@ export const Header: React.FC<HeaderProps> = ({
             {/* Session Timer Badge when authenticated */}
             {remainingSec !== null && (studentSession || teacherSession) && (
               <div
-                title={teacherSession ? "Durée de session professeur : 4 heures" : "Durée de session élève : 30 minutes"}
+                title={teacherSession ? "Durée de session professeur : 4 heures" : "Durée de session élève : 1 heure"}
                 className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-mono transition-colors border ${
                   isWarningTime
                     ? 'bg-amber-950/70 border-amber-600/70 text-amber-300 animate-pulse'
