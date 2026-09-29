@@ -2639,6 +2639,64 @@ for m in matieres:
     };
   }
 
+  public updateQCMQuestion(questionId: string, data: Partial<{
+    questionText: string;
+    optionA: string;
+    optionB: string;
+    optionC: string;
+    optionD: string;
+    correctOption: 'A' | 'B' | 'C' | 'D';
+    points: number;
+    explanation: string;
+    questionOrder: number;
+  }>): QCMQuestion {
+    const existing = this.db.prepare('SELECT * FROM qcm_questions WHERE id = ?').get(questionId) as any;
+    if (!existing) throw new Error('Question introuvable');
+
+    const questionText = data.questionText !== undefined ? data.questionText.trim() : String(existing.questionText);
+    const optionA = data.optionA !== undefined ? data.optionA.trim() : String(existing.optionA);
+    const optionB = data.optionB !== undefined ? data.optionB.trim() : String(existing.optionB);
+    const optionC = data.optionC !== undefined ? data.optionC.trim() : String(existing.optionC || '');
+    const optionD = data.optionD !== undefined ? data.optionD.trim() : String(existing.optionD || '');
+    const correctOption = data.correctOption !== undefined ? data.correctOption : String(existing.correctOption);
+    const points = data.points !== undefined ? Number(data.points) : Number(existing.points);
+    const explanation = data.explanation !== undefined ? data.explanation.trim() : String(existing.explanation || '');
+    const questionOrder = data.questionOrder !== undefined ? Number(data.questionOrder) : Number(existing.questionOrder);
+
+    this.db.prepare(`
+      UPDATE qcm_questions
+      SET questionText = ?, optionA = ?, optionB = ?, optionC = ?, optionD = ?,
+          correctOption = ?, points = ?, explanation = ?, questionOrder = ?
+      WHERE id = ?
+    `).run(
+      questionText,
+      optionA,
+      optionB,
+      optionC,
+      optionD,
+      correctOption,
+      points,
+      explanation,
+      questionOrder,
+      questionId
+    );
+
+    const updated = this.db.prepare('SELECT * FROM qcm_questions WHERE id = ?').get(questionId) as any;
+    return {
+      id: String(updated.id),
+      qcmId: String(updated.qcmId),
+      questionOrder: Number(updated.questionOrder),
+      questionText: String(updated.questionText),
+      optionA: String(updated.optionA),
+      optionB: String(updated.optionB),
+      optionC: String(updated.optionC),
+      optionD: String(updated.optionD),
+      correctOption: updated.correctOption as any,
+      points: Number(updated.points),
+      explanation: updated.explanation ? String(updated.explanation) : undefined
+    };
+  }
+
   public deleteQCMQuestion(questionId: string): boolean {
     const res = this.db.prepare('DELETE FROM qcm_questions WHERE id = ?').run(questionId);
     return res.changes > 0;

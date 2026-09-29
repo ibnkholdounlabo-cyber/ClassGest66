@@ -1187,6 +1187,27 @@ async function startServer() {
     }
   });
 
+  // Update single question (Teacher only)
+  app.put('/api/teacher/qcms/questions/:questionId', requireTeacher, (req, res) => {
+    const { questionText, optionA, optionB, optionC, optionD, correctOption, points, explanation, questionOrder } = req.body;
+    try {
+      const updated = db.updateQCMQuestion(req.params.questionId, {
+        questionText,
+        optionA,
+        optionB,
+        optionC,
+        optionD,
+        correctOption,
+        points: points !== undefined ? Number(points) : undefined,
+        explanation,
+        questionOrder: questionOrder !== undefined ? Number(questionOrder) : undefined
+      });
+      res.json(updated);
+    } catch (err: any) {
+      res.status(400).json({ error: err.message });
+    }
+  });
+
   // Delete single question (Teacher only)
   app.delete('/api/teacher/qcms/questions/:questionId', requireTeacher, (req, res) => {
     try {

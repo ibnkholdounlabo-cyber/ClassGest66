@@ -943,6 +943,35 @@ export const api = {
     );
   },
 
+  async teacherUpdateQCMQuestion(
+    token: string,
+    questionId: string,
+    questionData: Partial<{
+      questionText: string;
+      optionA: string;
+      optionB: string;
+      optionC: string;
+      optionD: string;
+      correctOption: 'A' | 'B' | 'C' | 'D';
+      points: number;
+      explanation?: string;
+      questionOrder?: number;
+    }>
+  ): Promise<QCMQuestion> {
+    return safeFetchJson<QCMQuestion>(
+      `${API_BASE}/teacher/qcms/questions/${questionId}`,
+      {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`
+        },
+        body: JSON.stringify(questionData)
+      },
+      'Erreur lors de la modification de la question'
+    );
+  },
+
   async teacherDeleteQCMQuestion(token: string, questionId: string) {
     return safeFetchJson(
       `${API_BASE}/teacher/qcms/questions/${questionId}`,

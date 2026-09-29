@@ -16,8 +16,13 @@ import {
   Sparkles,
   ChevronDown,
   ChevronUp,
+  ChevronLeft,
+  ChevronRight,
   RefreshCw,
   Edit3,
+  Pencil,
+  Copy,
+  Save,
   Printer,
   Download,
   BookOpen,
@@ -29,7 +34,10 @@ import {
   ArrowUp,
   ArrowDown,
   SlidersHorizontal,
-  Loader2
+  Loader2,
+  ListOrdered,
+  LayoutList,
+  Lightbulb
 } from 'lucide-react';
 import { api } from '../api';
 import { QCM, QCMQuestion, QCMEvaluationSummary, QCMSubmission, ClassGroup } from '../types';
@@ -98,6 +106,21 @@ export const TeacherQCMSection: React.FC<TeacherQCMSectionProps> = ({
   const [managingQuestions, setManagingQuestions] = useState<QCMQuestion[]>([]);
   const [loadingQuestions, setLoadingQuestions] = useState(false);
   const [showAddQuestionForm, setShowAddQuestionForm] = useState(false);
+  const [questionsViewMode, setQuestionsViewMode] = useState<'list' | 'step'>('list');
+  const [activeStepIndex, setActiveStepIndex] = useState<number>(0);
+  const [editingQuestionId, setEditingQuestionId] = useState<string | null>(null);
+  const [isSavingQuestion, setIsSavingQuestion] = useState(false);
+  const [editQuestionError, setEditQuestionError] = useState<string | null>(null);
+
+  // Edit Question form fields
+  const [editQuestionText, setEditQuestionText] = useState('');
+  const [editOptionA, setEditOptionA] = useState('');
+  const [editOptionB, setEditOptionB] = useState('');
+  const [editOptionC, setEditOptionC] = useState('');
+  const [editOptionD, setEditOptionD] = useState('');
+  const [editCorrectOption, setEditCorrectOption] = useState<'A' | 'B' | 'C' | 'D'>('A');
+  const [editPoints, setEditPoints] = useState<number>(1);
+  const [editExplanation, setEditExplanation] = useState('');
 
   // Add Question form state
   const [newQuestionText, setNewQuestionText] = useState('');
@@ -416,22 +439,156 @@ export const TeacherQCMSection: React.FC<TeacherQCMSectionProps> = ({
   };
 
   // Questions management
-  const handleOpenQuestions = async (qcm: QCM) => {
+  const populateEditForm = (question: QCMQuestion) => {
+    setEditingQuestionId(question.id);
+    setEditQuestionText(question.questionText || '');
+    setEditOptionA(question.optionA || '');
+    setEditOptionB(question.optionB || '');
+    setEditOptionC(question.optionC || '');
+    setEditOptionD(question.optionD || '');
+    setEditCorrectOption((question.correctOption as any) || 'A');
+    setEditPoints(question.points !== undefined ? Number(question.points) : 1);
+    setEditExplanation(question.explanation || '');
+    setEditQuestionError(null);
+  };
+
+  const handleOpenQuestions = async (qcm: QCM, startInStepMode = false) => {
     setManagingQcm(qcm);
     setShowAddQuestionForm(false);
     setSingleQuestionError(null);
-    await loadQuestionsForQcm(qcm.id);
+    setEditingQuestionId(null);
+    setEditQuestionError(null);
+    setQuestionsViewMode(startInStepMode ? 'step' : 'list');
+    setActiveStepIndex(0);
+    await loadQuestionsForQcm(qcm.id, startInStepMode);
   };
 
-  const loadQuestionsForQcm = async (qcmId: string) => {
+  const loadQuestionsForQcm = async (qcmId: string, openInStepMode = false) => {
     try {
       setLoadingQuestions(true);
       const fullQcm = await api.getQCMById(token, qcmId);
-      setManagingQuestions(fullQcm.questions || []);
+      const questionsList = fullQcm.questions || [];
+      setManagingQuestions(questionsList);
+      if (fullQcm) {
+        setManagingQcm(prev => prev ? { ...prev, ...fullQcm } : fullQcm);
+      }
+      if (questionsList.length > 0) {
+        if (openInStepMode || questionsViewMode === 'step') {
+          populateEditForm(questionsList[0]);
+          setActiveStepIndex(0);
+        }
+      }
     } catch (err: any) {
       notifyError(err.message || 'Impossible de charger les questions');
     } finally {
       setLoadingQuestions(false);
+    }
+  };
+
+  const handleStartEditQuestion = (question: QCMQuestion, openInStepMode = false) => {
+    populateEditForm(question);
+    const idx = managingQuestions.findIndex(q => q.id === question.id);
+    if (idx !== -1) {
+      setActiveStepIndex(idx);
+    }
+    if (openInStepMode) {
+      setQuestionsViewMode('step');
+    }
+  };
+
+  const handleCancelEditQuestion = () => {
+    setEditingQuestionId(null);
+    setEditQuestionError(null);
+  };
+
+  const handleSaveQuestion = async (andGoNext = false) => {
+    if (!editingQuestionId || !managingQcm) return;
+    setEditQuestionError(null);
+
+    if (!editQuestionText.trim()) {
+      setEditQuestionError("L'énoncé de la question est obligatoire.");
+      return;
+    }
+    if (!editOptionA.trim() || !editOptionB.trim()) {
+      setEditQuestionError("Les options A et B sont obligatoires.");
+      return;
+    }
+
+    try {
+      setIsSavingQuestion(true);
+      const updated = await api.teacherUpdateQCMQuestion(token, editingQuestionId, {
+        questionText: editQuestionText.trim(),
+        optionA: editOptionA.trim(),
+        optionB: editOptionB.trim(),
+        optionC: editOptionC.trim(),
+        optionD: editOptionD.trim(),
+        correctOption: editCorrectOption,
+        points: Number(editPoints) || 1,
+        explanation: editExplanation.trim()
+      });
+
+      const updatedList = managingQuestions.map(q => q.id === updated.id ? updated : q);
+      setManagingQuestions(updatedList);
+      notifySuccess(`Question n°${(updated.questionOrder || (activeStepIndex + 1))} enregistrée avec succès`);
+      loadQCMs();
+
+      if (andGoNext) {
+        const currentIdx = updatedList.findIndex(q => q.id === updated.id);
+        if (currentIdx !== -1 && currentIdx < updatedList.length - 1) {
+          const nextIdx = currentIdx + 1;
+          setActiveStepIndex(nextIdx);
+          populateEditForm(updatedList[nextIdx]);
+        } else {
+          notifySuccess('Toutes les questions du QCM ont été passées en revue !');
+          if (questionsViewMode === 'list') {
+            setEditingQuestionId(null);
+          }
+        }
+      } else {
+        if (questionsViewMode === 'list') {
+          setEditingQuestionId(null);
+        }
+      }
+    } catch (err: any) {
+      setEditQuestionError(err.message || 'Erreur lors de la modification de la question');
+      notifyError(err.message || 'Erreur lors de la modification de la question');
+    } finally {
+      setIsSavingQuestion(false);
+    }
+  };
+
+  const handleStepNavigate = (targetIdx: number) => {
+    if (targetIdx < 0 || targetIdx >= managingQuestions.length) return;
+    setActiveStepIndex(targetIdx);
+    populateEditForm(managingQuestions[targetIdx]);
+  };
+
+  const handleDuplicateQuestion = async (question: QCMQuestion) => {
+    if (!managingQcm) return;
+    try {
+      const duplicated = await api.teacherAddQCMQuestion(token, managingQcm.id, {
+        questionText: `${question.questionText} (copie)`,
+        optionA: question.optionA,
+        optionB: question.optionB,
+        optionC: question.optionC,
+        optionD: question.optionD,
+        correctOption: question.correctOption,
+        points: question.points,
+        explanation: question.explanation
+      });
+      notifySuccess('Question dupliquée avec succès');
+      const fullQcm = await api.getQCMById(token, managingQcm.id);
+      const newQuestions = fullQcm.questions || [];
+      setManagingQuestions(newQuestions);
+      const newIdx = newQuestions.findIndex(q => q.id === duplicated.id);
+      if (newIdx !== -1) {
+        setActiveStepIndex(newIdx);
+        populateEditForm(newQuestions[newIdx]);
+        setQuestionsViewMode('step');
+      }
+      loadQCMs();
+    } catch (err: any) {
+      notifyError(err.message || 'Erreur lors de la duplication de la question');
     }
   };
 
@@ -445,7 +602,7 @@ export const TeacherQCMSection: React.FC<TeacherQCMSectionProps> = ({
 
     try {
       setIsAddingQuestion(true);
-      await api.teacherAddQCMQuestion(token, managingQcm.id, {
+      const created = await api.teacherAddQCMQuestion(token, managingQcm.id, {
         questionText: newQuestionText.trim(),
         optionA: newOptionA.trim(),
         optionB: newOptionB.trim(),
@@ -483,6 +640,9 @@ export const TeacherQCMSection: React.FC<TeacherQCMSectionProps> = ({
     try {
       await api.teacherDeleteQCMQuestion(token, questionId);
       notifySuccess('Question supprimée');
+      if (editingQuestionId === questionId) {
+        setEditingQuestionId(null);
+      }
       await loadQuestionsForQcm(managingQcm.id);
       await loadQCMs();
     } catch (err: any) {
@@ -1046,12 +1206,22 @@ export const TeacherQCMSection: React.FC<TeacherQCMSectionProps> = ({
 
                     <button
                       type="button"
-                      onClick={() => handleOpenQuestions(qcm)}
-                      title="Gérer ou modifier les questions une par une"
-                      className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-white hover:bg-slate-50 text-slate-700 border border-slate-200 rounded-xl text-xs font-semibold transition-colors cursor-pointer"
+                      onClick={() => handleOpenQuestions(qcm, false)}
+                      title="Modifier ou gérer les questions une par une"
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-indigo-50/80 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 rounded-xl text-xs font-semibold transition-colors cursor-pointer"
                     >
-                      <Eye className="w-3.5 h-3.5 text-slate-500" />
-                      <span>Questions ({qcm.questionCount || 0})</span>
+                      <Pencil className="w-3.5 h-3.5 text-indigo-600" />
+                      <span>Modifier questions ({qcm.questionCount || 0})</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => handleOpenQuestions(qcm, true)}
+                      title="Modifier les questions une par une (Mode pas à pas)"
+                      className="inline-flex items-center gap-1 px-2.5 py-1.5 bg-white hover:bg-indigo-50 text-slate-700 hover:text-indigo-700 border border-slate-200 hover:border-indigo-200 rounded-xl text-xs font-medium transition-colors cursor-pointer"
+                    >
+                      <ListOrdered className="w-3.5 h-3.5 text-indigo-500" />
+                      <span>Pas à pas</span>
                     </button>
 
                     <button
@@ -1286,358 +1456,1197 @@ export const TeacherQCMSection: React.FC<TeacherQCMSectionProps> = ({
       {/* ========================================================================= */}
       {managingQcm && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4 overflow-y-auto">
-          <div className="bg-white rounded-3xl shadow-2xl max-w-3xl w-full border border-slate-200 overflow-hidden my-6">
+          <div className="bg-white rounded-3xl shadow-2xl max-w-4xl w-full border border-slate-200 overflow-hidden my-6 transition-all">
             {/* Header */}
-            <div className="p-6 bg-slate-900 text-white flex items-center justify-between">
+            <div className="p-5 sm:p-6 bg-slate-900 text-white flex items-center justify-between gap-4 flex-wrap">
               <div>
                 <div className="flex items-center gap-2">
-                  <HelpCircle className="w-5 h-5 text-indigo-400" />
+                  <HelpCircle className="w-5 h-5 text-indigo-400 shrink-0" />
                   <h3 className="font-bold text-base">Questions du QCM</h3>
+                  <span className="px-2 py-0.5 rounded-full text-[11px] font-bold bg-indigo-500/20 text-indigo-300 border border-indigo-500/30">
+                    {managingQuestions.length} question{managingQuestions.length > 1 ? 's' : ''}
+                  </span>
                 </div>
-                <p className="text-xs text-slate-400 mt-0.5">
-                  QCM : <strong className="text-white">{managingQcm.title}</strong> • {managingQuestions.length} question{managingQuestions.length > 1 ? 's' : ''}
+                <p className="text-xs text-slate-400 mt-1">
+                  QCM : <strong className="text-white">{managingQcm.title}</strong> • Total :{' '}
+                  <strong className="text-emerald-400">
+                    {managingQuestions.reduce((acc, q) => acc + (q.points || 0), 0)} pts
+                  </strong>
                 </p>
               </div>
 
-              <div className="flex items-center gap-2">
+              {/* View Mode Switcher + Actions */}
+              <div className="flex items-center gap-2 flex-wrap">
+                <div className="bg-slate-800 p-1 rounded-xl flex items-center border border-slate-700/60">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setQuestionsViewMode('list');
+                      setEditingQuestionId(null);
+                    }}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer ${
+                      questionsViewMode === 'list'
+                        ? 'bg-indigo-600 text-white shadow-sm'
+                        : 'text-slate-400 hover:text-white'
+                    }`}
+                  >
+                    <LayoutList className="w-3.5 h-3.5" />
+                    <span>Vue Liste</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (managingQuestions.length > 0) {
+                        setQuestionsViewMode('step');
+                        const targetIdx = activeStepIndex < managingQuestions.length ? activeStepIndex : 0;
+                        setActiveStepIndex(targetIdx);
+                        populateEditForm(managingQuestions[targetIdx]);
+                      } else {
+                        notifyError('Ajoutez ou importez d’abord des questions pour utiliser le mode pas à pas.');
+                      }
+                    }}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer ${
+                      questionsViewMode === 'step'
+                        ? 'bg-indigo-600 text-white shadow-sm'
+                        : 'text-slate-400 hover:text-white'
+                    }`}
+                  >
+                    <ListOrdered className="w-3.5 h-3.5" />
+                    <span>Modifier une par une</span>
+                  </button>
+                </div>
+
                 <button
                   type="button"
                   onClick={() => handleOpenImportModal(managingQcm)}
-                  className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-bold cursor-pointer inline-flex items-center gap-1.5"
+                  className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded-xl text-xs font-bold cursor-pointer inline-flex items-center gap-1.5 transition-colors"
                 >
-                  <FileSpreadsheet className="w-3.5 h-3.5" />
+                  <FileSpreadsheet className="w-3.5 h-3.5 text-indigo-400" />
                   <span>Importer</span>
                 </button>
+
                 <button
                   type="button"
-                  onClick={() => setManagingQcm(null)}
-                  className="text-slate-400 hover:text-white p-1 rounded-lg cursor-pointer"
+                  onClick={() => {
+                    setManagingQcm(null);
+                    setEditingQuestionId(null);
+                  }}
+                  className="text-slate-400 hover:text-white p-1 rounded-lg cursor-pointer transition-colors"
                 >
                   <X className="w-5 h-5" />
                 </button>
               </div>
             </div>
 
-            <div className="p-6 space-y-4 max-h-[75vh] overflow-y-auto">
-              {/* Add Question Toggle Button */}
-              <div className="flex items-center justify-between">
-                <button
-                  type="button"
-                  onClick={() => setShowAddQuestionForm(prev => !prev)}
-                  className="inline-flex items-center gap-1.5 px-3.5 py-2 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 rounded-xl text-xs font-bold transition-colors cursor-pointer"
-                >
-                  <Plus className="w-4 h-4" />
-                  <span>{showAddQuestionForm ? 'Masquer le formulaire' : 'Ajouter une question manuellement'}</span>
-                </button>
-              </div>
+            <div className="p-5 sm:p-6 space-y-4 max-h-[78vh] overflow-y-auto">
+              {/* ============================================================= */}
+              {/* MODE 1: ÉDITEUR PAS À PAS (UNE PAR UNE - EASY INTERFACE)     */}
+              {/* ============================================================= */}
+              {questionsViewMode === 'step' && (
+                <div className="space-y-4">
+                  {managingQuestions.length === 0 ? (
+                    <div className="p-8 text-center bg-slate-50 rounded-2xl border border-slate-200">
+                      <HelpCircle className="w-10 h-10 text-slate-300 mx-auto mb-2" />
+                      <p className="text-sm font-bold text-slate-700">Aucune question dans ce QCM</p>
+                      <p className="text-xs text-slate-400 mt-1 mb-4">
+                        Vous pouvez importer une série de questions ou en ajouter une manuellement.
+                      </p>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setQuestionsViewMode('list');
+                          setShowAddQuestionForm(true);
+                        }}
+                        className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold inline-flex items-center gap-1.5 cursor-pointer"
+                      >
+                        <Plus className="w-4 h-4" />
+                        <span>Créer la première question</span>
+                      </button>
+                    </div>
+                  ) : (
+                    <>
+                      {/* Top Step Navigator Bar */}
+                      <div className="p-3 bg-slate-50 rounded-2xl border border-slate-200 space-y-2.5">
+                        <div className="flex items-center justify-between text-xs">
+                          <span className="font-bold text-slate-700 flex items-center gap-1.5">
+                            <ListOrdered className="w-4 h-4 text-indigo-600" />
+                            <span>Sélectionner une question à modifier :</span>
+                          </span>
+                          <span className="text-slate-500 font-medium">
+                            Question <strong className="text-indigo-600">{activeStepIndex + 1}</strong> sur{' '}
+                            <strong>{managingQuestions.length}</strong>
+                          </span>
+                        </div>
 
-              {/* Add Question Form */}
-              {showAddQuestionForm && (
-                <form onSubmit={handleAddSingleQuestion} className="p-4 rounded-2xl bg-slate-50 border border-slate-200 space-y-3 text-xs">
-                  <div className="flex items-center justify-between">
-                    <h4 className="font-bold text-slate-800 text-sm">Nouvelle Question</h4>
-                    {singleQuestionError && (
-                      <span className="text-[11px] text-rose-600 font-semibold">{singleQuestionError}</span>
-                    )}
-                  </div>
+                        {/* Question pills carousel */}
+                        <div className="flex items-center gap-1.5 overflow-x-auto pb-1.5 pt-0.5 scrollbar-thin">
+                          <button
+                            type="button"
+                            disabled={activeStepIndex === 0}
+                            onClick={() => handleStepNavigate(activeStepIndex - 1)}
+                            className="p-1.5 rounded-lg bg-white border border-slate-200 text-slate-600 hover:bg-slate-100 disabled:opacity-40 disabled:pointer-events-none cursor-pointer shrink-0"
+                            title="Question précédente"
+                          >
+                            <ChevronLeft className="w-4 h-4" />
+                          </button>
 
-                  {singleQuestionError && (
-                    <div className="p-2.5 bg-rose-50 border border-rose-200 text-rose-800 rounded-xl text-xs flex items-center gap-2 font-medium">
-                      <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
-                      <span className="flex-1">{singleQuestionError}</span>
+                          <div className="flex items-center gap-1.5 overflow-x-auto py-0.5">
+                            {managingQuestions.map((q, idx) => {
+                              const isActive = idx === activeStepIndex;
+                              return (
+                                <button
+                                  key={q.id}
+                                  type="button"
+                                  onClick={() => handleStepNavigate(idx)}
+                                  className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer shrink-0 flex items-center gap-1.5 ${
+                                    isActive
+                                      ? 'bg-indigo-600 text-white shadow-md shadow-indigo-200 ring-2 ring-indigo-400'
+                                      : 'bg-white hover:bg-slate-100 text-slate-700 border border-slate-200'
+                                  }`}
+                                >
+                                  <span>Q{idx + 1}</span>
+                                  <span
+                                    className={`text-[10px] px-1.5 py-0.2 rounded-md ${
+                                      isActive ? 'bg-indigo-700/80 text-indigo-100' : 'bg-slate-100 text-slate-500'
+                                    }`}
+                                  >
+                                    {q.points || 1}p
+                                  </span>
+                                </button>
+                              );
+                            })}
+                          </div>
+
+                          <button
+                            type="button"
+                            disabled={activeStepIndex >= managingQuestions.length - 1}
+                            onClick={() => handleStepNavigate(activeStepIndex + 1)}
+                            className="p-1.5 rounded-lg bg-white border border-slate-200 text-slate-600 hover:bg-slate-100 disabled:opacity-40 disabled:pointer-events-none cursor-pointer shrink-0"
+                            title="Question suivante"
+                          >
+                            <ChevronRight className="w-4 h-4" />
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* Main Question Edit Card */}
+                      <div className="p-5 sm:p-6 rounded-2xl bg-white border-2 border-indigo-100 shadow-sm space-y-4">
+                        {/* Card Sub-Header */}
+                        <div className="flex items-center justify-between gap-3 pb-3 border-b border-slate-100 flex-wrap">
+                          <div className="flex items-center gap-2">
+                            <span className="w-8 h-8 rounded-xl bg-indigo-600 text-white font-extrabold text-sm flex items-center justify-center shadow-sm">
+                              {activeStepIndex + 1}
+                            </span>
+                            <div>
+                              <h4 className="font-bold text-slate-900 text-sm">
+                                Modification de la Question n°{activeStepIndex + 1}
+                              </h4>
+                              <p className="text-[11px] text-slate-400">
+                                Renseignez l’énoncé, les options, et cochez la bonne réponse en 1 clic.
+                              </p>
+                            </div>
+                          </div>
+
+                          <div className="flex items-center gap-1.5">
+                            {managingQuestions[activeStepIndex] && (
+                              <button
+                                type="button"
+                                onClick={() => handleDuplicateQuestion(managingQuestions[activeStepIndex])}
+                                className="px-2.5 py-1.5 bg-slate-100 hover:bg-indigo-50 text-slate-700 hover:text-indigo-700 rounded-xl text-xs font-semibold inline-flex items-center gap-1.5 cursor-pointer transition-colors"
+                                title="Dupliquer cette question"
+                              >
+                                <Copy className="w-3.5 h-3.5 text-indigo-600" />
+                                <span>Dupliquer</span>
+                              </button>
+                            )}
+
+                            {managingQuestions[activeStepIndex] && (
+                              <button
+                                type="button"
+                                onClick={() => handleDeleteQuestion(managingQuestions[activeStepIndex].id)}
+                                className="px-2.5 py-1.5 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 rounded-xl text-xs font-semibold inline-flex items-center gap-1.5 cursor-pointer transition-colors"
+                                title="Supprimer cette question"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                                <span>Supprimer</span>
+                              </button>
+                            )}
+                          </div>
+                        </div>
+
+                        {/* Error banner */}
+                        {editQuestionError && (
+                          <div className="p-3 bg-rose-50 border border-rose-200 text-rose-800 rounded-xl text-xs flex items-center gap-2 font-medium">
+                            <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
+                            <span className="flex-1">{editQuestionError}</span>
+                          </div>
+                        )}
+
+                        {/* Question Text */}
+                        <div>
+                          <label className="block font-bold text-slate-700 text-xs mb-1.5">
+                            Énoncé de la question *
+                          </label>
+                          <textarea
+                            rows={2}
+                            required
+                            placeholder="Ex: Quel raccourci clavier permet de sauvegarder rapidement un document ?"
+                            value={editQuestionText}
+                            onChange={e => setEditQuestionText(e.target.value)}
+                            className="w-full p-3 bg-slate-50/70 focus:bg-white border border-slate-300 rounded-xl text-xs font-medium text-slate-800 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 resize-y"
+                          />
+                        </div>
+
+                        {/* Answer Options Grid with 1-click correct answer toggle */}
+                        <div className="space-y-2">
+                          <div className="flex items-center justify-between">
+                            <label className="block font-bold text-slate-700 text-xs">
+                              Options de réponse & Bonne solution *
+                            </label>
+                            <span className="text-[11px] text-slate-400">
+                              Cliquez sur le bouton vert pour désigner la BONNE réponse
+                            </span>
+                          </div>
+
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                            {/* Option A */}
+                            <div
+                              className={`p-3 rounded-2xl border transition-all ${
+                                editCorrectOption === 'A'
+                                  ? 'bg-emerald-50/70 border-emerald-300 ring-2 ring-emerald-400/40'
+                                  : 'bg-slate-50/70 border-slate-200'
+                              }`}
+                            >
+                              <div className="flex items-center justify-between mb-1.5">
+                                <span className="font-bold text-xs text-slate-800 flex items-center gap-1.5">
+                                  <span
+                                    className={`w-5 h-5 rounded-lg flex items-center justify-center text-xs font-bold ${
+                                      editCorrectOption === 'A'
+                                        ? 'bg-emerald-600 text-white'
+                                        : 'bg-slate-200 text-slate-700'
+                                    }`}
+                                  >
+                                    A
+                                  </span>
+                                  <span>Option A *</span>
+                                </span>
+
+                                {editCorrectOption === 'A' ? (
+                                  <span className="px-2.5 py-1 bg-emerald-600 text-white rounded-lg font-bold text-[11px] inline-flex items-center gap-1 shadow-sm">
+                                    <Check className="w-3.5 h-3.5" />
+                                    <span>Bonne réponse</span>
+                                  </span>
+                                ) : (
+                                  <button
+                                    type="button"
+                                    onClick={() => setEditCorrectOption('A')}
+                                    className="px-2.5 py-1 bg-white hover:bg-emerald-100 text-slate-600 hover:text-emerald-800 border border-slate-200 hover:border-emerald-300 rounded-lg font-semibold text-[11px] cursor-pointer transition-colors"
+                                  >
+                                    Définir comme bonne
+                                  </button>
+                                )}
+                              </div>
+                              <input
+                                type="text"
+                                required
+                                value={editOptionA}
+                                onChange={e => setEditOptionA(e.target.value)}
+                                placeholder="Ex: Ctrl + C"
+                                className="w-full h-9 px-3 bg-white border border-slate-300 rounded-xl text-xs font-medium focus:ring-2 focus:ring-indigo-500"
+                              />
+                            </div>
+
+                            {/* Option B */}
+                            <div
+                              className={`p-3 rounded-2xl border transition-all ${
+                                editCorrectOption === 'B'
+                                  ? 'bg-emerald-50/70 border-emerald-300 ring-2 ring-emerald-400/40'
+                                  : 'bg-slate-50/70 border-slate-200'
+                              }`}
+                            >
+                              <div className="flex items-center justify-between mb-1.5">
+                                <span className="font-bold text-xs text-slate-800 flex items-center gap-1.5">
+                                  <span
+                                    className={`w-5 h-5 rounded-lg flex items-center justify-center text-xs font-bold ${
+                                      editCorrectOption === 'B'
+                                        ? 'bg-emerald-600 text-white'
+                                        : 'bg-slate-200 text-slate-700'
+                                    }`}
+                                  >
+                                    B
+                                  </span>
+                                  <span>Option B *</span>
+                                </span>
+
+                                {editCorrectOption === 'B' ? (
+                                  <span className="px-2.5 py-1 bg-emerald-600 text-white rounded-lg font-bold text-[11px] inline-flex items-center gap-1 shadow-sm">
+                                    <Check className="w-3.5 h-3.5" />
+                                    <span>Bonne réponse</span>
+                                  </span>
+                                ) : (
+                                  <button
+                                    type="button"
+                                    onClick={() => setEditCorrectOption('B')}
+                                    className="px-2.5 py-1 bg-white hover:bg-emerald-100 text-slate-600 hover:text-emerald-800 border border-slate-200 hover:border-emerald-300 rounded-lg font-semibold text-[11px] cursor-pointer transition-colors"
+                                  >
+                                    Définir comme bonne
+                                  </button>
+                                )}
+                              </div>
+                              <input
+                                type="text"
+                                required
+                                value={editOptionB}
+                                onChange={e => setEditOptionB(e.target.value)}
+                                placeholder="Ex: Ctrl + S"
+                                className="w-full h-9 px-3 bg-white border border-slate-300 rounded-xl text-xs font-medium focus:ring-2 focus:ring-indigo-500"
+                              />
+                            </div>
+
+                            {/* Option C */}
+                            <div
+                              className={`p-3 rounded-2xl border transition-all ${
+                                editCorrectOption === 'C'
+                                  ? 'bg-emerald-50/70 border-emerald-300 ring-2 ring-emerald-400/40'
+                                  : 'bg-slate-50/70 border-slate-200'
+                              }`}
+                            >
+                              <div className="flex items-center justify-between mb-1.5">
+                                <span className="font-bold text-xs text-slate-800 flex items-center gap-1.5">
+                                  <span
+                                    className={`w-5 h-5 rounded-lg flex items-center justify-center text-xs font-bold ${
+                                      editCorrectOption === 'C'
+                                        ? 'bg-emerald-600 text-white'
+                                        : 'bg-slate-200 text-slate-700'
+                                    }`}
+                                  >
+                                    C
+                                  </span>
+                                  <span>Option C (facultatif)</span>
+                                </span>
+
+                                {editCorrectOption === 'C' ? (
+                                  <span className="px-2.5 py-1 bg-emerald-600 text-white rounded-lg font-bold text-[11px] inline-flex items-center gap-1 shadow-sm">
+                                    <Check className="w-3.5 h-3.5" />
+                                    <span>Bonne réponse</span>
+                                  </span>
+                                ) : (
+                                  <button
+                                    type="button"
+                                    onClick={() => setEditCorrectOption('C')}
+                                    className="px-2.5 py-1 bg-white hover:bg-emerald-100 text-slate-600 hover:text-emerald-800 border border-slate-200 hover:border-emerald-300 rounded-lg font-semibold text-[11px] cursor-pointer transition-colors"
+                                  >
+                                    Définir comme bonne
+                                  </button>
+                                )}
+                              </div>
+                              <input
+                                type="text"
+                                value={editOptionC}
+                                onChange={e => setEditOptionC(e.target.value)}
+                                placeholder="Ex: Ctrl + V"
+                                className="w-full h-9 px-3 bg-white border border-slate-300 rounded-xl text-xs font-medium focus:ring-2 focus:ring-indigo-500"
+                              />
+                            </div>
+
+                            {/* Option D */}
+                            <div
+                              className={`p-3 rounded-2xl border transition-all ${
+                                editCorrectOption === 'D'
+                                  ? 'bg-emerald-50/70 border-emerald-300 ring-2 ring-emerald-400/40'
+                                  : 'bg-slate-50/70 border-slate-200'
+                              }`}
+                            >
+                              <div className="flex items-center justify-between mb-1.5">
+                                <span className="font-bold text-xs text-slate-800 flex items-center gap-1.5">
+                                  <span
+                                    className={`w-5 h-5 rounded-lg flex items-center justify-center text-xs font-bold ${
+                                      editCorrectOption === 'D'
+                                        ? 'bg-emerald-600 text-white'
+                                        : 'bg-slate-200 text-slate-700'
+                                    }`}
+                                  >
+                                    D
+                                  </span>
+                                  <span>Option D (facultatif)</span>
+                                </span>
+
+                                {editCorrectOption === 'D' ? (
+                                  <span className="px-2.5 py-1 bg-emerald-600 text-white rounded-lg font-bold text-[11px] inline-flex items-center gap-1 shadow-sm">
+                                    <Check className="w-3.5 h-3.5" />
+                                    <span>Bonne réponse</span>
+                                  </span>
+                                ) : (
+                                  <button
+                                    type="button"
+                                    onClick={() => setEditCorrectOption('D')}
+                                    className="px-2.5 py-1 bg-white hover:bg-emerald-100 text-slate-600 hover:text-emerald-800 border border-slate-200 hover:border-emerald-300 rounded-lg font-semibold text-[11px] cursor-pointer transition-colors"
+                                  >
+                                    Définir comme bonne
+                                  </button>
+                                )}
+                              </div>
+                              <input
+                                type="text"
+                                value={editOptionD}
+                                onChange={e => setEditOptionD(e.target.value)}
+                                placeholder="Ex: Ctrl + P"
+                                className="w-full h-9 px-3 bg-white border border-slate-300 rounded-xl text-xs font-medium focus:ring-2 focus:ring-indigo-500"
+                              />
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Points & Explanation Row */}
+                        <div className="grid grid-cols-1 md:grid-cols-3 gap-3 pt-1">
+                          {/* Points presets */}
+                          <div className="md:col-span-1 space-y-1.5">
+                            <label className="block font-bold text-slate-700 text-xs">
+                              Points attribués
+                            </label>
+                            <div className="flex items-center gap-1 flex-wrap">
+                              {[0.5, 1, 2, 3, 4, 5].map(pt => (
+                                <button
+                                  key={pt}
+                                  type="button"
+                                  onClick={() => setEditPoints(pt)}
+                                  className={`px-2 py-1 rounded-lg text-xs font-bold cursor-pointer transition-colors ${
+                                    Number(editPoints) === pt
+                                      ? 'bg-indigo-600 text-white shadow-sm'
+                                      : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+                                  }`}
+                                >
+                                  {pt} pt{pt > 1 ? 's' : ''}
+                                </button>
+                              ))}
+                            </div>
+                            <div className="pt-1">
+                              <input
+                                type="number"
+                                min="0.25"
+                                step="0.25"
+                                value={editPoints}
+                                onChange={e => setEditPoints(parseFloat(e.target.value) || 1)}
+                                className="w-28 h-8 px-2.5 bg-slate-50 border border-slate-300 rounded-lg text-xs font-bold text-indigo-700 focus:ring-2 focus:ring-indigo-500"
+                              />
+                            </div>
+                          </div>
+
+                          {/* Pedagogical Explanation */}
+                          <div className="md:col-span-2 space-y-1.5">
+                            <label className="block font-bold text-slate-700 text-xs flex items-center gap-1.5">
+                              <Lightbulb className="w-3.5 h-3.5 text-amber-500" />
+                              <span>Explication pédagogique (affichée lors de la correction)</span>
+                            </label>
+                            <input
+                              type="text"
+                              value={editExplanation}
+                              onChange={e => setEditExplanation(e.target.value)}
+                              placeholder="Ex: Le raccourci universel de sauvegarde est Ctrl+S (Save)."
+                              className="w-full h-9 px-3 bg-slate-50/70 focus:bg-white border border-slate-300 rounded-xl text-xs focus:ring-2 focus:ring-indigo-500"
+                            />
+                            <p className="text-[10px] text-slate-400 italic">
+                              Facultatif : aide l'élève à comprendre son erreur après la soumission du QCM.
+                            </p>
+                          </div>
+                        </div>
+
+                        {/* Bottom Navigation and Save Bar */}
+                        <div className="pt-3 border-t border-slate-100 flex items-center justify-between gap-2 flex-wrap">
+                          <div className="flex items-center gap-2">
+                            <button
+                              type="button"
+                              disabled={activeStepIndex === 0}
+                              onClick={() => handleStepNavigate(activeStepIndex - 1)}
+                              className="px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-semibold inline-flex items-center gap-1.5 disabled:opacity-40 disabled:pointer-events-none cursor-pointer transition-colors"
+                            >
+                              <ChevronLeft className="w-4 h-4" />
+                              <span>Question précédente</span>
+                            </button>
+
+                            {managingQuestions[activeStepIndex] && (
+                              <button
+                                type="button"
+                                onClick={() => populateEditForm(managingQuestions[activeStepIndex])}
+                                className="px-3 py-2 bg-white text-slate-500 hover:text-slate-800 border border-slate-200 rounded-xl text-xs font-medium cursor-pointer transition-colors"
+                              >
+                                Rétablir
+                              </button>
+                            )}
+                          </div>
+
+                          <div className="flex items-center gap-2">
+                            <button
+                              type="button"
+                              disabled={isSavingQuestion}
+                              onClick={() => handleSaveQuestion(false)}
+                              className="px-4 py-2 bg-white hover:bg-slate-50 text-slate-700 border border-slate-300 rounded-xl text-xs font-bold inline-flex items-center gap-1.5 cursor-pointer transition-colors shadow-sm disabled:opacity-50"
+                            >
+                              {isSavingQuestion ? (
+                                <Loader2 className="w-3.5 h-3.5 animate-spin text-slate-600" />
+                              ) : (
+                                <Save className="w-3.5 h-3.5 text-slate-600" />
+                              )}
+                              <span>Enregistrer</span>
+                            </button>
+
+                            <button
+                              type="button"
+                              disabled={isSavingQuestion}
+                              onClick={() => handleSaveQuestion(true)}
+                              className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold inline-flex items-center gap-1.5 cursor-pointer shadow-md shadow-indigo-200 transition-colors disabled:opacity-50"
+                            >
+                              {isSavingQuestion ? (
+                                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                              ) : (
+                                <Check className="w-3.5 h-3.5" />
+                              )}
+                              <span>
+                                {activeStepIndex < managingQuestions.length - 1
+                                  ? 'Enregistrer & Suivante →'
+                                  : 'Enregistrer & Terminer'}
+                              </span>
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    </>
+                  )}
+                </div>
+              )}
+
+              {/* ============================================================= */}
+              {/* MODE 2: VUE LISTE COMPLÈTE (AVEC ÉDITION INLINE ET MODIFIER)  */}
+              {/* ============================================================= */}
+              {questionsViewMode === 'list' && (
+                <div className="space-y-4">
+                  {/* Banner to switch to Step Mode */}
+                  {managingQuestions.length > 0 && (
+                    <div className="p-3 bg-gradient-to-r from-indigo-50 via-purple-50 to-indigo-50 border border-indigo-100 rounded-2xl flex items-center justify-between gap-3 text-xs">
+                      <div className="flex items-center gap-2 text-indigo-900">
+                        <Sparkles className="w-4 h-4 text-indigo-600 shrink-0" />
+                        <span>
+                          <strong>Astuce :</strong> Vous pouvez modifier chaque question une par une en plein écran avec notre éditeur guidé.
+                        </span>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setQuestionsViewMode('step');
+                          const targetIdx = 0;
+                          setActiveStepIndex(targetIdx);
+                          populateEditForm(managingQuestions[targetIdx]);
+                        }}
+                        className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-bold cursor-pointer shrink-0 transition-colors flex items-center gap-1"
+                      >
+                        <ListOrdered className="w-3.5 h-3.5" />
+                        <span>Mode Pas à pas</span>
+                      </button>
                     </div>
                   )}
 
-                  <div>
-                    <label className="block font-semibold text-slate-700 mb-1">Énoncé de la question *</label>
-                    <input
-                      type="text"
-                      required
-                      placeholder="Ex: Quel raccourci clavier permet de sauvegarder un document ?"
-                      value={newQuestionText}
-                      onChange={e => setNewQuestionText(e.target.value)}
-                      className="w-full h-9 px-3 bg-white border border-slate-300 rounded-xl text-xs focus:ring-2 focus:ring-indigo-500"
-                    />
-                  </div>
-
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                    <div>
-                      <label className="block font-semibold text-slate-700 mb-1">Option A *</label>
-                      <input
-                        type="text"
-                        required
-                        value={newOptionA}
-                        onChange={e => setNewOptionA(e.target.value)}
-                        placeholder="Ex: Ctrl + C"
-                        className="w-full h-9 px-3 bg-white border border-slate-300 rounded-xl text-xs focus:ring-2 focus:ring-indigo-500"
-                      />
-                    </div>
-                    <div>
-                      <label className="block font-semibold text-slate-700 mb-1">Option B *</label>
-                      <input
-                        type="text"
-                        required
-                        value={newOptionB}
-                        onChange={e => setNewOptionB(e.target.value)}
-                        placeholder="Ex: Ctrl + S"
-                        className="w-full h-9 px-3 bg-white border border-slate-300 rounded-xl text-xs focus:ring-2 focus:ring-indigo-500"
-                      />
-                    </div>
-                    <div>
-                      <label className="block font-semibold text-slate-700 mb-1">Option C (facultatif)</label>
-                      <input
-                        type="text"
-                        value={newOptionC}
-                        onChange={e => setNewOptionC(e.target.value)}
-                        placeholder="Ex: Ctrl + V"
-                        className="w-full h-9 px-3 bg-white border border-slate-300 rounded-xl text-xs focus:ring-2 focus:ring-indigo-500"
-                      />
-                    </div>
-                    <div>
-                      <label className="block font-semibold text-slate-700 mb-1">Option D (facultatif)</label>
-                      <input
-                        type="text"
-                        value={newOptionD}
-                        onChange={e => setNewOptionD(e.target.value)}
-                        placeholder="Ex: Ctrl + P"
-                        className="w-full h-9 px-3 bg-white border border-slate-300 rounded-xl text-xs focus:ring-2 focus:ring-indigo-500"
-                      />
-                    </div>
-                  </div>
-
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
-                    <div>
-                      <label className="block font-semibold text-slate-700 mb-1">Bonne réponse *</label>
-                      <select
-                        value={newCorrectOption}
-                        onChange={e => setNewCorrectOption(e.target.value as any)}
-                        className="w-full h-9 px-3 bg-white border border-slate-300 rounded-xl text-xs font-bold text-indigo-700 focus:ring-2 focus:ring-indigo-500"
-                      >
-                        <option value="A">Option A</option>
-                        <option value="B">Option B</option>
-                        <option value="C">Option C</option>
-                        <option value="D">Option D</option>
-                      </select>
-                    </div>
-
-                    <div>
-                      <label className="block font-semibold text-slate-700 mb-1">Points attribués</label>
-                      <input
-                        type="number"
-                        min="0.5"
-                        step="0.5"
-                        value={newPoints}
-                        onChange={e => setNewPoints(parseFloat(e.target.value) || 1)}
-                        className="w-full h-9 px-3 bg-white border border-slate-300 rounded-xl text-xs focus:ring-2 focus:ring-indigo-500"
-                      />
-                    </div>
-                  </div>
-
-                  <div>
-                    <label className="block font-semibold text-slate-700 mb-1">Explication pédagogique (affichée lors de la correction)</label>
-                    <input
-                      type="text"
-                      value={newExplanation}
-                      onChange={e => setNewExplanation(e.target.value)}
-                      placeholder="Ex: Ctrl + S permet d'enregistrer instantanément le fichier sans passer par le menu."
-                      className="w-full h-9 px-3 bg-white border border-slate-300 rounded-xl text-xs focus:ring-2 focus:ring-indigo-500"
-                    />
-                  </div>
-
-                  <div className="flex items-center justify-end gap-2 pt-2">
+                  {/* Add Question Toggle Button */}
+                  <div className="flex items-center justify-between">
                     <button
                       type="button"
-                      disabled={isAddingQuestion}
-                      onClick={() => setShowAddQuestionForm(false)}
-                      className="px-3 py-1.5 bg-white text-slate-600 border border-slate-300 rounded-xl text-xs disabled:opacity-50"
+                      onClick={() => setShowAddQuestionForm(prev => !prev)}
+                      className="inline-flex items-center gap-1.5 px-3.5 py-2 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 rounded-xl text-xs font-bold transition-colors cursor-pointer"
                     >
-                      Annuler
+                      <Plus className="w-4 h-4" />
+                      <span>{showAddQuestionForm ? 'Masquer le formulaire' : 'Ajouter une question manuellement'}</span>
                     </button>
-                    <button
-                      type="submit"
-                      disabled={isAddingQuestion}
-                      className="px-4 py-1.5 bg-indigo-600 disabled:opacity-60 text-white rounded-xl text-xs font-bold hover:bg-indigo-700 flex items-center gap-1.5"
-                    >
-                      {isAddingQuestion ? (
-                        <>
-                          <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                          <span>Ajout en cours...</span>
-                        </>
-                      ) : (
-                        <span>Ajouter cette question</span>
+                  </div>
+
+                  {/* Add Question Form */}
+                  {showAddQuestionForm && (
+                    <form onSubmit={handleAddSingleQuestion} className="p-4 rounded-2xl bg-slate-50 border border-slate-200 space-y-3 text-xs">
+                      <div className="flex items-center justify-between">
+                        <h4 className="font-bold text-slate-800 text-sm">Nouvelle Question</h4>
+                        {singleQuestionError && (
+                          <span className="text-[11px] text-rose-600 font-semibold">{singleQuestionError}</span>
+                        )}
+                      </div>
+
+                      {singleQuestionError && (
+                        <div className="p-2.5 bg-rose-50 border border-rose-200 text-rose-800 rounded-xl text-xs flex items-center gap-2 font-medium">
+                          <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
+                          <span className="flex-1">{singleQuestionError}</span>
+                        </div>
                       )}
-                    </button>
-                  </div>
-                </form>
-              )}
 
-              {/* Questions List */}
-              {/* Filter and search bar for questions */}
-              {managingQuestions.length > 0 && (
-                <div className="p-3 bg-slate-50 rounded-2xl border border-slate-200 flex flex-wrap items-center justify-between gap-2.5 text-xs">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <div className="relative">
-                      <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2" />
-                      <input
-                        type="text"
-                        placeholder="Filtrer questions ou options..."
-                        value={questionSearch}
-                        onChange={e => setQuestionSearch(e.target.value)}
-                        className="h-7 pl-8 pr-2.5 bg-white border border-slate-200 rounded-lg text-xs w-48 focus:outline-none focus:ring-1 focus:ring-indigo-500"
-                      />
-                    </div>
+                      <div>
+                        <label className="block font-semibold text-slate-700 mb-1">Énoncé de la question *</label>
+                        <input
+                          type="text"
+                          required
+                          placeholder="Ex: Quel raccourci clavier permet de sauvegarder un document ?"
+                          value={newQuestionText}
+                          onChange={e => setNewQuestionText(e.target.value)}
+                          className="w-full h-9 px-3 bg-white border border-slate-300 rounded-xl text-xs focus:ring-2 focus:ring-indigo-500"
+                        />
+                      </div>
 
-                    <div className="flex items-center gap-1">
-                      <ArrowUpDown className="w-3 h-3 text-slate-400" />
-                      <span className="text-[11px] text-slate-500">Trier :</span>
-                      <select
-                        value={questionSort}
-                        onChange={e => setQuestionSort(e.target.value as any)}
-                        className="h-7 px-2 bg-white border border-slate-200 rounded-lg text-xs font-medium text-slate-700"
-                      >
-                        <option value="default">Ordre initial</option>
-                        <option value="text-asc">Énoncé (A → Z)</option>
-                        <option value="points-desc">Points (décroissant)</option>
-                        <option value="points-asc">Points (croissant)</option>
-                      </select>
-                    </div>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        <div>
+                          <label className="block font-semibold text-slate-700 mb-1">Option A *</label>
+                          <input
+                            type="text"
+                            required
+                            value={newOptionA}
+                            onChange={e => setNewOptionA(e.target.value)}
+                            placeholder="Ex: Ctrl + C"
+                            className="w-full h-9 px-3 bg-white border border-slate-300 rounded-xl text-xs focus:ring-2 focus:ring-indigo-500"
+                          />
+                        </div>
+                        <div>
+                          <label className="block font-semibold text-slate-700 mb-1">Option B *</label>
+                          <input
+                            type="text"
+                            required
+                            value={newOptionB}
+                            onChange={e => setNewOptionB(e.target.value)}
+                            placeholder="Ex: Ctrl + S"
+                            className="w-full h-9 px-3 bg-white border border-slate-300 rounded-xl text-xs focus:ring-2 focus:ring-indigo-500"
+                          />
+                        </div>
+                        <div>
+                          <label className="block font-semibold text-slate-700 mb-1">Option C (facultatif)</label>
+                          <input
+                            type="text"
+                            value={newOptionC}
+                            onChange={e => setNewOptionC(e.target.value)}
+                            placeholder="Ex: Ctrl + V"
+                            className="w-full h-9 px-3 bg-white border border-slate-300 rounded-xl text-xs focus:ring-2 focus:ring-indigo-500"
+                          />
+                        </div>
+                        <div>
+                          <label className="block font-semibold text-slate-700 mb-1">Option D (facultatif)</label>
+                          <input
+                            type="text"
+                            value={newOptionD}
+                            onChange={e => setNewOptionD(e.target.value)}
+                            placeholder="Ex: Ctrl + P"
+                            className="w-full h-9 px-3 bg-white border border-slate-300 rounded-xl text-xs focus:ring-2 focus:ring-indigo-500"
+                          />
+                        </div>
+                      </div>
 
-                    {questionSearch && (
-                      <button
-                        onClick={() => setQuestionSearch('')}
-                        className="text-[11px] text-slate-500 hover:text-slate-800 font-semibold cursor-pointer"
-                      >
-                        Effacer
-                      </button>
-                    )}
-                  </div>
-
-                  <span className="text-[11px] text-slate-500 font-medium">
-                    {filteredManagingQuestions.length} sur {managingQuestions.length} question{managingQuestions.length > 1 ? 's' : ''}
-                  </span>
-                </div>
-              )}
-
-              {loadingQuestions ? (
-                <div className="p-8 text-center text-slate-400">
-                  <RefreshCw className="w-5 h-5 animate-spin mx-auto mb-2 text-indigo-600" />
-                  <p className="text-xs">Chargement des questions...</p>
-                </div>
-              ) : managingQuestions.length === 0 ? (
-                <div className="p-8 text-center bg-slate-50 rounded-2xl border border-slate-200">
-                  <HelpCircle className="w-8 h-8 text-slate-300 mx-auto mb-2" />
-                  <p className="text-xs font-bold text-slate-700">Aucune question dans ce QCM</p>
-                  <p className="text-xs text-slate-400 mt-1">
-                    Utilisez le bouton "Importer" pour charger une liste de questions en une seule fois.
-                  </p>
-                </div>
-              ) : filteredManagingQuestions.length === 0 ? (
-                <div className="p-8 text-center bg-slate-50 rounded-2xl border border-slate-200 text-slate-500 text-xs">
-                  <Search className="w-6 h-6 text-slate-400 mx-auto mb-2" />
-                  <p className="font-semibold">Aucune question ne correspond à votre filtre</p>
-                  <button
-                    onClick={() => setQuestionSearch('')}
-                    className="mt-2 text-indigo-600 font-semibold hover:underline"
-                  >
-                    Effacer le filtre de recherche
-                  </button>
-                </div>
-              ) : (
-                <div className="space-y-3">
-                  {filteredManagingQuestions.map((q, idx) => (
-                    <div
-                      key={q.id}
-                      className="p-4 rounded-2xl bg-white border border-slate-200 shadow-sm space-y-2.5"
-                    >
-                      <div className="flex items-start justify-between gap-3">
-                        <div className="flex items-start gap-2.5">
-                          <span className="w-6 h-6 rounded-lg bg-indigo-100 text-indigo-800 text-xs font-bold flex items-center justify-center flex-shrink-0 mt-0.5">
-                            {idx + 1}
-                          </span>
-                          <div>
-                            <h5 className="text-xs font-bold text-slate-900 leading-snug">{q.questionText}</h5>
-                            <span className="text-[11px] text-slate-400 font-medium">
-                              Valeur : {q.points} point{q.points > 1 ? 's' : ''}
-                            </span>
-                          </div>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
+                        <div>
+                          <label className="block font-semibold text-slate-700 mb-1">Bonne réponse *</label>
+                          <select
+                            value={newCorrectOption}
+                            onChange={e => setNewCorrectOption(e.target.value as any)}
+                            className="w-full h-9 px-3 bg-white border border-slate-300 rounded-xl text-xs font-bold text-indigo-700 focus:ring-2 focus:ring-indigo-500"
+                          >
+                            <option value="A">Option A</option>
+                            <option value="B">Option B</option>
+                            <option value="C">Option C</option>
+                            <option value="D">Option D</option>
+                          </select>
                         </div>
 
+                        <div>
+                          <label className="block font-semibold text-slate-700 mb-1">Points attribués</label>
+                          <input
+                            type="number"
+                            min="0.5"
+                            step="0.5"
+                            value={newPoints}
+                            onChange={e => setNewPoints(parseFloat(e.target.value) || 1)}
+                            className="w-full h-9 px-3 bg-white border border-slate-300 rounded-xl text-xs focus:ring-2 focus:ring-indigo-500"
+                          />
+                        </div>
+                      </div>
+
+                      <div>
+                        <label className="block font-semibold text-slate-700 mb-1">Explication pédagogique (affichée lors de la correction)</label>
+                        <input
+                          type="text"
+                          value={newExplanation}
+                          onChange={e => setNewExplanation(e.target.value)}
+                          placeholder="Ex: Ctrl + S permet d'enregistrer instantanément le fichier sans passer par le menu."
+                          className="w-full h-9 px-3 bg-white border border-slate-300 rounded-xl text-xs focus:ring-2 focus:ring-indigo-500"
+                        />
+                      </div>
+
+                      <div className="flex items-center justify-end gap-2 pt-2">
                         <button
                           type="button"
-                          onClick={() => handleDeleteQuestion(q.id)}
-                          title="Supprimer cette question"
-                          className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors cursor-pointer"
+                          disabled={isAddingQuestion}
+                          onClick={() => setShowAddQuestionForm(false)}
+                          className="px-3 py-1.5 bg-white text-slate-600 border border-slate-300 rounded-xl text-xs disabled:opacity-50 cursor-pointer"
                         >
-                          <Trash2 className="w-4 h-4" />
+                          Annuler
+                        </button>
+                        <button
+                          type="submit"
+                          disabled={isAddingQuestion}
+                          className="px-4 py-1.5 bg-indigo-600 disabled:opacity-60 text-white rounded-xl text-xs font-bold hover:bg-indigo-700 flex items-center gap-1.5 cursor-pointer"
+                        >
+                          {isAddingQuestion ? (
+                            <>
+                              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                              <span>Ajout en cours...</span>
+                            </>
+                          ) : (
+                            <span>Ajouter cette question</span>
+                          )}
                         </button>
                       </div>
+                    </form>
+                  )}
 
-                      {/* Options Grid */}
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs pt-1">
-                        <div className={`p-2 rounded-xl border flex items-center justify-between ${
-                          q.correctOption === 'A'
-                            ? 'bg-emerald-50 border-emerald-300 text-emerald-900 font-bold'
-                            : 'bg-slate-50 border-slate-200 text-slate-700'
-                        }`}>
-                          <span><strong>A.</strong> {q.optionA}</span>
-                          {q.correctOption === 'A' && <Check className="w-3.5 h-3.5 text-emerald-600" />}
+                  {/* Filter and search bar for questions */}
+                  {managingQuestions.length > 0 && (
+                    <div className="p-3 bg-slate-50 rounded-2xl border border-slate-200 flex flex-wrap items-center justify-between gap-2.5 text-xs">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <div className="relative">
+                          <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2" />
+                          <input
+                            type="text"
+                            placeholder="Filtrer questions ou options..."
+                            value={questionSearch}
+                            onChange={e => setQuestionSearch(e.target.value)}
+                            className="h-7 pl-8 pr-2.5 bg-white border border-slate-200 rounded-lg text-xs w-48 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                          />
                         </div>
 
-                        <div className={`p-2 rounded-xl border flex items-center justify-between ${
-                          q.correctOption === 'B'
-                            ? 'bg-emerald-50 border-emerald-300 text-emerald-900 font-bold'
-                            : 'bg-slate-50 border-slate-200 text-slate-700'
-                        }`}>
-                          <span><strong>B.</strong> {q.optionB}</span>
-                          {q.correctOption === 'B' && <Check className="w-3.5 h-3.5 text-emerald-600" />}
+                        <div className="flex items-center gap-1">
+                          <ArrowUpDown className="w-3 h-3 text-slate-400" />
+                          <span className="text-[11px] text-slate-500">Trier :</span>
+                          <select
+                            value={questionSort}
+                            onChange={e => setQuestionSort(e.target.value as any)}
+                            className="h-7 px-2 bg-white border border-slate-200 rounded-lg text-xs font-medium text-slate-700"
+                          >
+                            <option value="default">Ordre initial</option>
+                            <option value="text-asc">Énoncé (A → Z)</option>
+                            <option value="points-desc">Points (décroissant)</option>
+                            <option value="points-asc">Points (croissant)</option>
+                          </select>
                         </div>
 
-                        {q.optionC && (
-                          <div className={`p-2 rounded-xl border flex items-center justify-between ${
-                            q.correctOption === 'C'
-                              ? 'bg-emerald-50 border-emerald-300 text-emerald-900 font-bold'
-                              : 'bg-slate-50 border-slate-200 text-slate-700'
-                          }`}>
-                            <span><strong>C.</strong> {q.optionC}</span>
-                            {q.correctOption === 'C' && <Check className="w-3.5 h-3.5 text-emerald-600" />}
-                          </div>
-                        )}
-
-                        {q.optionD && (
-                          <div className={`p-2 rounded-xl border flex items-center justify-between ${
-                            q.correctOption === 'D'
-                              ? 'bg-emerald-50 border-emerald-300 text-emerald-900 font-bold'
-                              : 'bg-slate-50 border-slate-200 text-slate-700'
-                          }`}>
-                            <span><strong>D.</strong> {q.optionD}</span>
-                            {q.correctOption === 'D' && <Check className="w-3.5 h-3.5 text-emerald-600" />}
-                          </div>
+                        {questionSearch && (
+                          <button
+                            onClick={() => setQuestionSearch('')}
+                            className="text-[11px] text-slate-500 hover:text-slate-800 font-semibold cursor-pointer"
+                          >
+                            Effacer
+                          </button>
                         )}
                       </div>
 
-                      {q.explanation && (
-                        <p className="text-[11px] text-slate-500 italic bg-slate-50 p-2 rounded-xl border border-slate-100">
-                          Explication : {q.explanation}
-                        </p>
-                      )}
+                      <span className="text-[11px] text-slate-500 font-medium">
+                        {filteredManagingQuestions.length} sur {managingQuestions.length} question{managingQuestions.length > 1 ? 's' : ''}
+                      </span>
                     </div>
-                  ))}
+                  )}
+
+                  {loadingQuestions ? (
+                    <div className="p-8 text-center text-slate-400">
+                      <RefreshCw className="w-5 h-5 animate-spin mx-auto mb-2 text-indigo-600" />
+                      <p className="text-xs">Chargement des questions...</p>
+                    </div>
+                  ) : managingQuestions.length === 0 ? (
+                    <div className="p-8 text-center bg-slate-50 rounded-2xl border border-slate-200">
+                      <HelpCircle className="w-8 h-8 text-slate-300 mx-auto mb-2" />
+                      <p className="text-xs font-bold text-slate-700">Aucune question dans ce QCM</p>
+                      <p className="text-xs text-slate-400 mt-1">
+                        Utilisez le bouton "Importer" pour charger une liste de questions en une seule fois.
+                      </p>
+                    </div>
+                  ) : filteredManagingQuestions.length === 0 ? (
+                    <div className="p-8 text-center bg-slate-50 rounded-2xl border border-slate-200 text-slate-500 text-xs">
+                      <Search className="w-6 h-6 text-slate-400 mx-auto mb-2" />
+                      <p className="font-semibold">Aucune question ne correspond à votre filtre</p>
+                      <button
+                        onClick={() => setQuestionSearch('')}
+                        className="mt-2 text-indigo-600 font-semibold hover:underline"
+                      >
+                        Effacer le filtre de recherche
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="space-y-3">
+                      {filteredManagingQuestions.map((q, idx) => {
+                        const isEditingThis = editingQuestionId === q.id;
+
+                        if (isEditingThis) {
+                          return (
+                            /* INLINE EDIT CARD */
+                            <div
+                              key={q.id}
+                              className="p-5 rounded-2xl bg-white border-2 border-indigo-500 shadow-md space-y-3 text-xs animate-in fade-in duration-150"
+                            >
+                              <div className="flex items-center justify-between pb-2 border-b border-slate-100">
+                                <div className="flex items-center gap-2">
+                                  <span className="w-6 h-6 rounded-lg bg-indigo-600 text-white font-bold flex items-center justify-center text-xs">
+                                    {q.questionOrder || idx + 1}
+                                  </span>
+                                  <span className="font-bold text-slate-900">
+                                    Modifier la question #{q.questionOrder || idx + 1}
+                                  </span>
+                                </div>
+                                <div className="flex items-center gap-1.5">
+                                  <button
+                                    type="button"
+                                    onClick={() => handleStartEditQuestion(q, true)}
+                                    className="px-2 py-1 text-[11px] font-semibold text-indigo-700 bg-indigo-50 hover:bg-indigo-100 rounded-lg inline-flex items-center gap-1 cursor-pointer"
+                                  >
+                                    <ListOrdered className="w-3 h-3" />
+                                    <span>Plein écran (Pas à pas)</span>
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={handleCancelEditQuestion}
+                                    className="text-slate-400 hover:text-slate-600 p-1"
+                                  >
+                                    <X className="w-4 h-4" />
+                                  </button>
+                                </div>
+                              </div>
+
+                              {editQuestionError && (
+                                <div className="p-2.5 bg-rose-50 border border-rose-200 text-rose-800 rounded-xl text-xs flex items-center gap-2 font-medium">
+                                  <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
+                                  <span className="flex-1">{editQuestionError}</span>
+                                </div>
+                              )}
+
+                              <div>
+                                <label className="block font-bold text-slate-700 mb-1">Énoncé *</label>
+                                <textarea
+                                  rows={2}
+                                  value={editQuestionText}
+                                  onChange={e => setEditQuestionText(e.target.value)}
+                                  className="w-full p-2.5 bg-slate-50 border border-slate-300 rounded-xl text-xs font-medium focus:ring-2 focus:ring-indigo-500"
+                                />
+                              </div>
+
+                              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                                {/* Option A */}
+                                <div className={`p-2.5 rounded-xl border ${editCorrectOption === 'A' ? 'bg-emerald-50 border-emerald-300 ring-1 ring-emerald-400' : 'bg-slate-50 border-slate-200'}`}>
+                                  <div className="flex items-center justify-between mb-1">
+                                    <span className="font-bold text-slate-700">Option A *</span>
+                                    {editCorrectOption === 'A' ? (
+                                      <span className="text-[10px] font-bold text-emerald-800 bg-emerald-200/80 px-2 py-0.5 rounded-md flex items-center gap-1">
+                                        <Check className="w-3 h-3" /> Bonne
+                                      </span>
+                                    ) : (
+                                      <button
+                                        type="button"
+                                        onClick={() => setEditCorrectOption('A')}
+                                        className="text-[10px] text-slate-500 hover:text-emerald-700 font-semibold cursor-pointer"
+                                      >
+                                        Définir bonne
+                                      </button>
+                                    )}
+                                  </div>
+                                  <input
+                                    type="text"
+                                    value={editOptionA}
+                                    onChange={e => setEditOptionA(e.target.value)}
+                                    className="w-full h-8 px-2.5 bg-white border border-slate-300 rounded-lg text-xs"
+                                  />
+                                </div>
+
+                                {/* Option B */}
+                                <div className={`p-2.5 rounded-xl border ${editCorrectOption === 'B' ? 'bg-emerald-50 border-emerald-300 ring-1 ring-emerald-400' : 'bg-slate-50 border-slate-200'}`}>
+                                  <div className="flex items-center justify-between mb-1">
+                                    <span className="font-bold text-slate-700">Option B *</span>
+                                    {editCorrectOption === 'B' ? (
+                                      <span className="text-[10px] font-bold text-emerald-800 bg-emerald-200/80 px-2 py-0.5 rounded-md flex items-center gap-1">
+                                        <Check className="w-3 h-3" /> Bonne
+                                      </span>
+                                    ) : (
+                                      <button
+                                        type="button"
+                                        onClick={() => setEditCorrectOption('B')}
+                                        className="text-[10px] text-slate-500 hover:text-emerald-700 font-semibold cursor-pointer"
+                                      >
+                                        Définir bonne
+                                      </button>
+                                    )}
+                                  </div>
+                                  <input
+                                    type="text"
+                                    value={editOptionB}
+                                    onChange={e => setEditOptionB(e.target.value)}
+                                    className="w-full h-8 px-2.5 bg-white border border-slate-300 rounded-lg text-xs"
+                                  />
+                                </div>
+
+                                {/* Option C */}
+                                <div className={`p-2.5 rounded-xl border ${editCorrectOption === 'C' ? 'bg-emerald-50 border-emerald-300 ring-1 ring-emerald-400' : 'bg-slate-50 border-slate-200'}`}>
+                                  <div className="flex items-center justify-between mb-1">
+                                    <span className="font-bold text-slate-700">Option C (facultatif)</span>
+                                    {editCorrectOption === 'C' ? (
+                                      <span className="text-[10px] font-bold text-emerald-800 bg-emerald-200/80 px-2 py-0.5 rounded-md flex items-center gap-1">
+                                        <Check className="w-3 h-3" /> Bonne
+                                      </span>
+                                    ) : (
+                                      <button
+                                        type="button"
+                                        onClick={() => setEditCorrectOption('C')}
+                                        className="text-[10px] text-slate-500 hover:text-emerald-700 font-semibold cursor-pointer"
+                                      >
+                                        Définir bonne
+                                      </button>
+                                    )}
+                                  </div>
+                                  <input
+                                    type="text"
+                                    value={editOptionC}
+                                    onChange={e => setEditOptionC(e.target.value)}
+                                    className="w-full h-8 px-2.5 bg-white border border-slate-300 rounded-lg text-xs"
+                                  />
+                                </div>
+
+                                {/* Option D */}
+                                <div className={`p-2.5 rounded-xl border ${editCorrectOption === 'D' ? 'bg-emerald-50 border-emerald-300 ring-1 ring-emerald-400' : 'bg-slate-50 border-slate-200'}`}>
+                                  <div className="flex items-center justify-between mb-1">
+                                    <span className="font-bold text-slate-700">Option D (facultatif)</span>
+                                    {editCorrectOption === 'D' ? (
+                                      <span className="text-[10px] font-bold text-emerald-800 bg-emerald-200/80 px-2 py-0.5 rounded-md flex items-center gap-1">
+                                        <Check className="w-3.5 h-3.5" /> Bonne
+                                      </span>
+                                    ) : (
+                                      <button
+                                        type="button"
+                                        onClick={() => setEditCorrectOption('D')}
+                                        className="text-[10px] text-slate-500 hover:text-emerald-700 font-semibold cursor-pointer"
+                                      >
+                                        Définir bonne
+                                      </button>
+                                    )}
+                                  </div>
+                                  <input
+                                    type="text"
+                                    value={editOptionD}
+                                    onChange={e => setEditOptionD(e.target.value)}
+                                    className="w-full h-8 px-2.5 bg-white border border-slate-300 rounded-lg text-xs"
+                                  />
+                                </div>
+                              </div>
+
+                              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
+                                <div>
+                                  <label className="block font-semibold text-slate-700 mb-1">Points</label>
+                                  <input
+                                    type="number"
+                                    min="0.5"
+                                    step="0.5"
+                                    value={editPoints}
+                                    onChange={e => setEditPoints(parseFloat(e.target.value) || 1)}
+                                    className="w-full h-8 px-2.5 bg-slate-50 border border-slate-300 rounded-lg text-xs font-bold text-indigo-700"
+                                  />
+                                </div>
+
+                                <div>
+                                  <label className="block font-semibold text-slate-700 mb-1">Explication</label>
+                                  <input
+                                    type="text"
+                                    value={editExplanation}
+                                    onChange={e => setEditExplanation(e.target.value)}
+                                    placeholder="Explication affichée à la correction"
+                                    className="w-full h-8 px-2.5 bg-slate-50 border border-slate-300 rounded-lg text-xs"
+                                  />
+                                </div>
+                              </div>
+
+                              <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100">
+                                <button
+                                  type="button"
+                                  onClick={handleCancelEditQuestion}
+                                  className="px-3 py-1.5 bg-white text-slate-600 border border-slate-300 rounded-xl text-xs cursor-pointer hover:bg-slate-50"
+                                >
+                                  Annuler
+                                </button>
+                                <button
+                                  type="button"
+                                  disabled={isSavingQuestion}
+                                  onClick={() => handleSaveQuestion(false)}
+                                  className="px-4 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold inline-flex items-center gap-1.5 cursor-pointer shadow-sm disabled:opacity-50"
+                                >
+                                  {isSavingQuestion ? (
+                                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                                  ) : (
+                                    <Check className="w-3.5 h-3.5" />
+                                  )}
+                                  <span>Enregistrer les modifications</span>
+                                </button>
+                              </div>
+                            </div>
+                          );
+                        }
+
+                        /* STANDARD QUESTION CARD IN LIST */
+                        return (
+                          <div
+                            key={q.id}
+                            className="p-4 rounded-2xl bg-white border border-slate-200 shadow-sm space-y-2.5 hover:border-slate-300 transition-colors"
+                          >
+                            <div className="flex items-start justify-between gap-3">
+                              <div className="flex items-start gap-2.5">
+                                <span className="w-6 h-6 rounded-lg bg-indigo-100 text-indigo-800 text-xs font-bold flex items-center justify-center flex-shrink-0 mt-0.5">
+                                  {q.questionOrder || idx + 1}
+                                </span>
+                                <div>
+                                  <h5 className="text-xs font-bold text-slate-900 leading-snug">{q.questionText}</h5>
+                                  <span className="text-[11px] text-slate-400 font-medium">
+                                    Valeur : {q.points} point{q.points > 1 ? 's' : ''}
+                                  </span>
+                                </div>
+                              </div>
+
+                              <div className="flex items-center gap-1 shrink-0">
+                                <button
+                                  type="button"
+                                  onClick={() => handleStartEditQuestion(q, false)}
+                                  title="Modifier cette question"
+                                  className="px-2.5 py-1 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 rounded-lg text-xs font-semibold inline-flex items-center gap-1 transition-colors cursor-pointer"
+                                >
+                                  <Pencil className="w-3 h-3 text-indigo-600" />
+                                  <span>Modifier</span>
+                                </button>
+
+                                <button
+                                  type="button"
+                                  onClick={() => handleStartEditQuestion(q, true)}
+                                  title="Ouvrir dans l'éditeur pas à pas"
+                                  className="p-1.5 text-slate-500 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-colors cursor-pointer"
+                                >
+                                  <ListOrdered className="w-4 h-4" />
+                                </button>
+
+                                <button
+                                  type="button"
+                                  onClick={() => handleDuplicateQuestion(q)}
+                                  title="Dupliquer cette question"
+                                  className="p-1.5 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-colors cursor-pointer"
+                                >
+                                  <Copy className="w-4 h-4" />
+                                </button>
+
+                                <button
+                                  type="button"
+                                  onClick={() => handleDeleteQuestion(q.id)}
+                                  title="Supprimer cette question"
+                                  className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors cursor-pointer"
+                                >
+                                  <Trash2 className="w-4 h-4" />
+                                </button>
+                              </div>
+                            </div>
+
+                            {/* Options Grid */}
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs pt-1">
+                              <div
+                                className={`p-2 rounded-xl border flex items-center justify-between ${
+                                  q.correctOption === 'A'
+                                    ? 'bg-emerald-50 border-emerald-300 text-emerald-900 font-bold'
+                                    : 'bg-slate-50 border-slate-200 text-slate-700'
+                                }`}
+                              >
+                                <span>
+                                  <strong>A.</strong> {q.optionA}
+                                </span>
+                                {q.correctOption === 'A' && <Check className="w-3.5 h-3.5 text-emerald-600 shrink-0" />}
+                              </div>
+
+                              <div
+                                className={`p-2 rounded-xl border flex items-center justify-between ${
+                                  q.correctOption === 'B'
+                                    ? 'bg-emerald-50 border-emerald-300 text-emerald-900 font-bold'
+                                    : 'bg-slate-50 border-slate-200 text-slate-700'
+                                }`}
+                              >
+                                <span>
+                                  <strong>B.</strong> {q.optionB}
+                                </span>
+                                {q.correctOption === 'B' && <Check className="w-3.5 h-3.5 text-emerald-600 shrink-0" />}
+                              </div>
+
+                              {q.optionC && (
+                                <div
+                                  className={`p-2 rounded-xl border flex items-center justify-between ${
+                                    q.correctOption === 'C'
+                                      ? 'bg-emerald-50 border-emerald-300 text-emerald-900 font-bold'
+                                      : 'bg-slate-50 border-slate-200 text-slate-700'
+                                  }`}
+                                >
+                                  <span>
+                                    <strong>C.</strong> {q.optionC}
+                                  </span>
+                                  {q.correctOption === 'C' && <Check className="w-3.5 h-3.5 text-emerald-600 shrink-0" />}
+                                </div>
+                              )}
+
+                              {q.optionD && (
+                                <div
+                                  className={`p-2 rounded-xl border flex items-center justify-between ${
+                                    q.correctOption === 'D'
+                                      ? 'bg-emerald-50 border-emerald-300 text-emerald-900 font-bold'
+                                      : 'bg-slate-50 border-slate-200 text-slate-700'
+                                  }`}
+                                >
+                                  <span>
+                                    <strong>D.</strong> {q.optionD}
+                                  </span>
+                                  {q.correctOption === 'D' && <Check className="w-3.5 h-3.5 text-emerald-600 shrink-0" />}
+                                </div>
+                              )}
+                            </div>
+
+                            {q.explanation && (
+                              <p className="text-[11px] text-slate-500 italic bg-slate-50 p-2 rounded-xl border border-slate-100 flex items-center gap-1.5">
+                                <Lightbulb className="w-3 h-3 text-amber-500 shrink-0" />
+                                <span>Explication : {q.explanation}</span>
+                              </p>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
                 </div>
               )}
             </div>
 
             {/* Footer */}
-            <div className="p-4 bg-slate-50 border-t border-slate-200 flex items-center justify-between">
+            <div className="p-4 bg-slate-50 border-t border-slate-200 flex items-center justify-between gap-4 flex-wrap">
               <span className="text-xs text-slate-500">
                 Total des points : <strong>{managingQuestions.reduce((acc, q) => acc + (q.points || 0), 0)} pts</strong>
+                {' • '}
+                <strong>{managingQuestions.length}</strong> question{managingQuestions.length > 1 ? 's' : ''}
               </span>
-              <button
-                type="button"
-                onClick={() => setManagingQcm(null)}
-                className="px-4 py-2 bg-slate-900 hover:bg-slate-800 text-white rounded-xl text-xs font-bold cursor-pointer"
-              >
-                Fermer
-              </button>
+              <div className="flex items-center gap-2">
+                {questionsViewMode === 'step' && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setQuestionsViewMode('list');
+                      setEditingQuestionId(null);
+                    }}
+                    className="px-3.5 py-2 bg-white hover:bg-slate-100 text-slate-700 border border-slate-200 rounded-xl text-xs font-semibold cursor-pointer transition-colors inline-flex items-center gap-1.5"
+                  >
+                    <LayoutList className="w-3.5 h-3.5 text-slate-500" />
+                    <span>Voir toutes les questions</span>
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setManagingQcm(null);
+                    setEditingQuestionId(null);
+                  }}
+                  className="px-4 py-2 bg-slate-900 hover:bg-slate-800 text-white rounded-xl text-xs font-bold cursor-pointer transition-colors"
+                >
+                  Fermer
+                </button>
+              </div>
             </div>
           </div>
         </div>
