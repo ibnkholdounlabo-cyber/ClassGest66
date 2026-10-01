@@ -210,6 +210,7 @@ export interface QCMAttempt {
   qcmTitle: string;
   studentId: string;
   studentName?: string;
+  studentNumber?: string;
   classId: string;
   className?: string;
   level?: string;
@@ -270,6 +271,9 @@ export interface QCMSubmission {
   qcmTitle?: string;
   isPractice?: boolean;
   officialScore20?: number;
+  attemptsCount?: number;
+  bestScore20?: number;
+  latestScore20?: number;
 }
 
 export interface StudentQCMStatus {
@@ -284,7 +288,14 @@ export interface QCMEvaluationSummary {
   averageScore20: number;
   highestScore20: number;
   lowestScore20: number;
-  submissions: Array<QCMSubmission & { studentName: string; studentNumber: string; className?: string }>;
+  submissions: Array<QCMSubmission & {
+    studentName: string;
+    studentNumber: string;
+    className?: string;
+    attemptsCount?: number;
+    bestScore20?: number;
+    latestScore20?: number;
+  }>;
   questionStats: Array<{
     questionId: string;
     questionOrder: number;
@@ -293,6 +304,7 @@ export interface QCMEvaluationSummary {
     correctAnswers: number;
     successRate: number;
   }>;
+  allAttempts?: QCMAttempt[];
 }
 
 // ==========================================

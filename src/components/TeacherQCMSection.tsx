@@ -37,10 +37,14 @@ import {
   Loader2,
   ListOrdered,
   LayoutList,
-  Lightbulb
+  Lightbulb,
+  History,
+  TrendingUp,
+  UserCheck,
+  Users
 } from 'lucide-react';
 import { api } from '../api';
-import { QCM, QCMQuestion, QCMEvaluationSummary, QCMSubmission, ClassGroup } from '../types';
+import { QCM, QCMQuestion, QCMEvaluationSummary, QCMSubmission, QCMAttempt, ClassGroup } from '../types';
 import { parseQcmImportText, SAMPLE_QCM_IMPORT, ParsedQuestionRow } from '../utils/qcmParser';
 
 interface TeacherQCMSectionProps {
@@ -136,7 +140,20 @@ export const TeacherQCMSection: React.FC<TeacherQCMSectionProps> = ({
   const [evaluationQcm, setEvaluationQcm] = useState<QCM | null>(null);
   const [evaluationData, setEvaluationData] = useState<QCMEvaluationSummary | null>(null);
   const [loadingEvaluations, setLoadingEvaluations] = useState(false);
-  const [inspectingSubmission, setInspectingSubmission] = useState<QCMSubmission | null>(null);
+  const [inspectingSubmission, setInspectingSubmission] = useState<any | null>(null);
+
+  // QCM Evaluations sub-tab & attempts history state
+  const [evalResultsTab, setEvalResultsTab] = useState<'students' | 'attempts' | 'questions'>('students');
+  const [selectedStudentForHistory, setSelectedStudentForHistory] = useState<{
+    studentId: string;
+    studentName: string;
+    studentNumber?: string;
+    className?: string;
+  } | null>(null);
+  const [evalAttemptSearch, setEvalAttemptSearch] = useState('');
+  const [evalAttemptSearchStudent, setEvalAttemptSearchStudent] = useState<string>('all');
+  const [evalAttemptScoreFilter, setEvalAttemptScoreFilter] = useState<'all' | 'pass' | 'fail' | 'high'>('all');
+  const [evalAttemptSortBy, setEvalAttemptSortBy] = useState<'date-desc' | 'date-asc' | 'score-desc' | 'score-asc' | 'name-asc'>('date-desc');
 
   // In-app Delete confirmation state
   const [qcmToDelete, setQcmToDelete] = useState<QCM | null>(null);
@@ -654,6 +671,12 @@ export const TeacherQCMSection: React.FC<TeacherQCMSectionProps> = ({
   const handleOpenEvaluations = async (qcm: QCM) => {
     setEvaluationQcm(qcm);
     setInspectingSubmission(null);
+    setEvalResultsTab('students');
+    setSelectedStudentForHistory(null);
+    setEvalAttemptSearch('');
+    setEvalAttemptSearchStudent('all');
+    setEvalAttemptScoreFilter('all');
+    setEvalAttemptSortBy('date-desc');
     setEvalQuestionSearch('');
     setEvalQuestionDifficulty('all');
     setEvalQuestionSort('order');
@@ -669,6 +692,15 @@ export const TeacherQCMSection: React.FC<TeacherQCMSectionProps> = ({
           const fullQcm = await api.getQCMById(token, qcm.id);
           if (summary?.qcm && fullQcm?.questions) {
             summary.qcm.questions = fullQcm.questions;
+          }
+        } catch {}
+      }
+      // Ensure allAttempts is populated
+      if (!summary?.allAttempts || summary.allAttempts.length === 0) {
+        try {
+          const attemptsList = await api.getTeacherQCMAttempts(token, { qcmId: qcm.id });
+          if (Array.isArray(attemptsList) && attemptsList.length > 0) {
+            summary.allAttempts = attemptsList;
           }
         } catch {}
       }
@@ -878,6 +910,83 @@ export const TeacherQCMSection: React.FC<TeacherQCMSectionProps> = ({
       if (evalQuestionSort === 'answers-desc') return b.totalAnswers - a.totalAnswers;
       return (a.questionOrder ?? 0) - (b.questionOrder ?? 0);
     });
+
+  // Group all attempts for this QCM by studentId (sorted oldest to newest)
+  const attemptsByStudent = useMemo(() => {
+    const map = new Map<string, QCMAttempt[]>();
+    const list = evaluationData?.allAttempts || [];
+    for (const att of list) {
+      if (!map.has(att.studentId)) {
+        map.set(att.studentId, []);
+      }
+      map.get(att.studentId)!.push(att);
+    }
+    map.forEach((atts) => {
+      atts.sort((a, b) => new Date(a.completedAt).getTime() - new Date(b.completedAt).getTime());
+    });
+    return map;
+  }, [evaluationData?.allAttempts]);
+
+  // Distinct students who made attempts on this QCM
+  const distinctAttemptStudents = useMemo(() => {
+    const map = new Map<string, { studentId: string; studentName: string; studentNumber?: string; className?: string }>();
+    const list = evaluationData?.allAttempts || [];
+    for (const att of list) {
+      if (!map.has(att.studentId)) {
+        map.set(att.studentId, {
+          studentId: att.studentId,
+          studentName: att.studentName || 'Élève',
+          studentNumber: att.studentNumber,
+          className: att.className
+        });
+      }
+    }
+    return Array.from(map.values()).sort((a, b) => a.studentName.localeCompare(b.studentName, 'fr'));
+  }, [evaluationData?.allAttempts]);
+
+  // Filtered attempts for QCM evaluation Tab 2 (History of all attempts)
+  const filteredAttemptsForQcm = useMemo(() => {
+    const list = evaluationData?.allAttempts || [];
+    return list.filter(att => {
+      // Class filter
+      if (evalSubClassFilter !== 'all') {
+        const matchesClass = att.classId === evalSubClassFilter || att.className === evalSubClassFilter ||
+          (evalClassesList.find(c => c.id === evalSubClassFilter)?.name === att.className);
+        if (!matchesClass) return false;
+      }
+      // Student filter
+      if (evalAttemptSearchStudent !== 'all' && att.studentId !== evalAttemptSearchStudent) {
+        return false;
+      }
+      // Search query
+      if (evalAttemptSearch.trim()) {
+        const q = evalAttemptSearch.toLowerCase().trim();
+        const matchesName = (att.studentName || '').toLowerCase().includes(q);
+        const matchesNum = (att.studentNumber || '').toLowerCase().includes(q);
+        const matchesClass = (att.className || '').toLowerCase().includes(q);
+        if (!matchesName && !matchesNum && !matchesClass) return false;
+      }
+      // Score filter
+      if (evalAttemptScoreFilter === 'pass' && att.score20 < 10) return false;
+      if (evalAttemptScoreFilter === 'fail' && att.score20 >= 10) return false;
+      if (evalAttemptScoreFilter === 'high' && att.score20 < 16) return false;
+
+      return true;
+    }).sort((a, b) => {
+      if (evalAttemptSortBy === 'date-desc') return new Date(b.completedAt).getTime() - new Date(a.completedAt).getTime();
+      if (evalAttemptSortBy === 'date-asc') return new Date(a.completedAt).getTime() - new Date(b.completedAt).getTime();
+      if (evalAttemptSortBy === 'score-desc') return (b.score20 || 0) - (a.score20 || 0);
+      if (evalAttemptSortBy === 'score-asc') return (a.score20 || 0) - (b.score20 || 0);
+      if (evalAttemptSortBy === 'name-asc') return (a.studentName || '').localeCompare(b.studentName || '', 'fr');
+      return 0;
+    });
+  }, [evaluationData?.allAttempts, evalSubClassFilter, evalClassesList, evalAttemptSearchStudent, evalAttemptSearch, evalAttemptScoreFilter, evalAttemptSortBy]);
+
+  // Attempts of selected student for history modal (sorted chronologically)
+  const selectedStudentAttempts = useMemo(() => {
+    if (!selectedStudentForHistory) return [];
+    return attemptsByStudent.get(selectedStudentForHistory.studentId) || [];
+  }, [selectedStudentForHistory, attemptsByStudent]);
 
   // Parse preview in import modal
   const importParseResult = importText.trim() ? parseQcmImportText(importText) : null;
@@ -2796,7 +2905,65 @@ export const TeacherQCMSection: React.FC<TeacherQCMSectionProps> = ({
                     </div>
                   </div>
 
-                  {/* Submissions Table */}
+                  {/* Tab Navigation: Élèves & Copies / Historique de tous les essais / Taux par question */}
+                  <div className="flex flex-wrap items-center gap-2 border-b border-slate-200 pb-3 no-print">
+                    <button
+                      type="button"
+                      onClick={() => setEvalResultsTab('students')}
+                      className={`px-4 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer inline-flex items-center gap-2 ${
+                        evalResultsTab === 'students'
+                          ? 'bg-indigo-600 text-white shadow-xs'
+                          : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+                      }`}
+                    >
+                      <Users className="w-4 h-4" />
+                      <span>Élèves & Copies officielles</span>
+                      <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                        evalResultsTab === 'students' ? 'bg-indigo-700 text-white' : 'bg-slate-200 text-slate-700'
+                      }`}>
+                        {filteredSubmissions.length}
+                      </span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setEvalResultsTab('attempts')}
+                      className={`px-4 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer inline-flex items-center gap-2 ${
+                        evalResultsTab === 'attempts'
+                          ? 'bg-indigo-600 text-white shadow-xs'
+                          : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+                      }`}
+                    >
+                      <Clock className="w-4 h-4" />
+                      <span>Historique de tous les essais</span>
+                      <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                        evalResultsTab === 'attempts' ? 'bg-indigo-700 text-white' : 'bg-slate-200 text-slate-700'
+                      }`}>
+                        {filteredAttemptsForQcm.length}
+                      </span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setEvalResultsTab('questions')}
+                      className={`px-4 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer inline-flex items-center gap-2 ${
+                        evalResultsTab === 'questions'
+                          ? 'bg-indigo-600 text-white shadow-xs'
+                          : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+                      }`}
+                    >
+                      <BarChart3 className="w-4 h-4" />
+                      <span>Taux de réussite par question</span>
+                      <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                        evalResultsTab === 'questions' ? 'bg-indigo-700 text-white' : 'bg-slate-200 text-slate-700'
+                      }`}>
+                        {effectiveQuestionStats.length}
+                      </span>
+                    </button>
+                  </div>
+
+                  {/* TAB 1: Submissions Table */}
+                  {evalResultsTab === 'students' && (
                   <div>
                     <div className="flex flex-wrap items-center justify-between gap-3 mb-2.5">
                       <div className="flex flex-wrap items-center gap-2">
@@ -2907,6 +3074,7 @@ export const TeacherQCMSection: React.FC<TeacherQCMSectionProps> = ({
                               </div>
                             </th>
                             <th className="p-3 text-center">Score brut</th>
+                            <th className="p-3 text-center">Essais & Historique</th>
                             <th
                               onClick={() => setEvalSubSortBy(prev => prev === 'time-asc' ? 'score-desc' : 'time-asc')}
                               className="p-3 text-center cursor-pointer hover:bg-slate-200/70 transition-colors"
@@ -2925,13 +3093,13 @@ export const TeacherQCMSection: React.FC<TeacherQCMSectionProps> = ({
                                 {evalSubSortBy === 'date-desc' ? <ArrowDown className="w-3 h-3 text-indigo-600" /> : <ArrowUpDown className="w-3 h-3 text-slate-400 opacity-60" />}
                               </div>
                             </th>
-                            <th className="p-3 text-right no-print">Copie</th>
+                            <th className="p-3 text-right no-print">Actions</th>
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-slate-100">
                           {filteredSubmissions.length === 0 ? (
                             <tr>
-                              <td colSpan={8} className="p-8 text-center text-slate-400">
+                              <td colSpan={9} className="p-8 text-center text-slate-400">
                                 Aucun résultat ne correspond à votre filtre{evalSubClassFilter !== 'all' ? ` pour la classe ${selectedClassDisplayName}` : ''}.
                               </td>
                             </tr>
@@ -2941,6 +3109,8 @@ export const TeacherQCMSection: React.FC<TeacherQCMSectionProps> = ({
                             if (sub.score20 >= 16) badgeBg = 'bg-emerald-50 text-emerald-700 border-emerald-200';
                             else if (sub.score20 >= 12) badgeBg = 'bg-sky-50 text-sky-700 border-sky-200';
                             else if (sub.score20 >= 10) badgeBg = 'bg-amber-50 text-amber-800 border-amber-200';
+
+                            const attemptsCount = sub.attemptsCount || 1;
 
                             return (
                               <tr key={sub.id} className="hover:bg-slate-50 transition-colors">
@@ -2959,6 +3129,27 @@ export const TeacherQCMSection: React.FC<TeacherQCMSectionProps> = ({
                                 <td className="p-3 text-center font-medium text-slate-600">
                                   {sub.totalScore} / {sub.maxScore} pts
                                 </td>
+                                <td className="p-3 text-center whitespace-nowrap">
+                                  <button
+                                    type="button"
+                                    onClick={() => setSelectedStudentForHistory({
+                                      studentId: sub.studentId,
+                                      studentName: sub.studentName,
+                                      studentNumber: sub.studentNumber,
+                                      className: sub.className
+                                    })}
+                                    className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-bold text-indigo-700 bg-indigo-50 hover:bg-indigo-100 rounded-xl border border-indigo-200 transition-all cursor-pointer shadow-2xs hover:scale-105"
+                                    title="Voir l'historique complet de tous les essais de cet élève sur ce QCM"
+                                  >
+                                    <Clock className="w-3.5 h-3.5 text-indigo-600" />
+                                    <span>{attemptsCount} essai{attemptsCount > 1 ? 's' : ''}</span>
+                                  </button>
+                                  {attemptsCount > 1 && sub.bestScore20 !== undefined && (
+                                    <div className="text-[10px] text-slate-400 mt-0.5 font-medium">
+                                      Record: <strong className="text-emerald-700">{sub.bestScore20}/20</strong>
+                                    </div>
+                                  )}
+                                </td>
                                 <td className="p-3 text-center text-slate-500">
                                   {Math.floor(sub.timeSpentSeconds / 60)}m {sub.timeSpentSeconds % 60}s
                                 </td>
@@ -2970,14 +3161,32 @@ export const TeacherQCMSection: React.FC<TeacherQCMSectionProps> = ({
                                     minute: '2-digit'
                                   })}
                                 </td>
-                                <td className="p-3 text-right no-print">
-                                  <button
-                                    type="button"
-                                    onClick={() => setInspectingSubmission(sub)}
-                                    className="px-2.5 py-1 text-[11px] font-semibold text-indigo-600 hover:bg-indigo-50 rounded-lg border border-indigo-200 transition-colors cursor-pointer"
-                                  >
-                                    Voir copie
-                                  </button>
+                                <td className="p-3 text-right no-print whitespace-nowrap">
+                                  <div className="flex items-center justify-end gap-1.5">
+                                    <button
+                                      type="button"
+                                      onClick={() => setSelectedStudentForHistory({
+                                        studentId: sub.studentId,
+                                        studentName: sub.studentName,
+                                        studentNumber: sub.studentNumber,
+                                        className: sub.className
+                                      })}
+                                      className="px-2.5 py-1 text-[11px] font-semibold text-purple-700 hover:bg-purple-50 rounded-lg border border-purple-200 transition-colors cursor-pointer inline-flex items-center gap-1"
+                                      title="Consulter l'historique chronologique des tentatives de cet élève"
+                                    >
+                                      <Clock className="w-3 h-3 text-purple-600" />
+                                      <span className="hidden sm:inline">Historique</span>
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => setInspectingSubmission(sub)}
+                                      className="px-2.5 py-1 text-[11px] font-semibold text-indigo-600 hover:bg-indigo-50 rounded-lg border border-indigo-200 transition-colors cursor-pointer inline-flex items-center gap-1"
+                                      title="Voir la copie officielle de l'élève"
+                                    >
+                                      <Eye className="w-3 h-3" />
+                                      <span>Copie</span>
+                                    </button>
+                                  </div>
                                 </td>
                               </tr>
                             );
@@ -2987,10 +3196,246 @@ export const TeacherQCMSection: React.FC<TeacherQCMSectionProps> = ({
                     </table>
                   </div>
                 </div>
+              )}
 
-                  {/* Question Success Rates Analytics */}
-                  {evaluationData.questionStats && evaluationData.questionStats.length > 0 && (
-                    <div className="pt-2">
+              {/* TAB 2: ALL ATTEMPTS HISTORY FOR THIS QCM */}
+              {evalResultsTab === 'attempts' && (
+                <div className="space-y-4">
+                  {/* Filter Bar for Attempts */}
+                  <div className="bg-slate-50 border border-slate-200 rounded-2xl p-3.5 flex flex-wrap items-center justify-between gap-3 text-xs no-print">
+                    <div className="flex flex-wrap items-center gap-2.5">
+                      {/* Student selector */}
+                      <div className="flex items-center gap-1.5">
+                        <span className="font-bold text-slate-700">Élève :</span>
+                        <select
+                          value={evalAttemptSearchStudent}
+                          onChange={e => setEvalAttemptSearchStudent(e.target.value)}
+                          className="h-8 px-2.5 bg-white border border-slate-200 rounded-xl font-medium text-slate-800 focus:outline-none focus:ring-1 focus:ring-indigo-500 max-w-xs"
+                        >
+                          <option value="all">Tous les élèves ({distinctAttemptStudents.length})</option>
+                          {distinctAttemptStudents.map(s => (
+                            <option key={s.studentId} value={s.studentId}>
+                              {s.studentName} {s.className ? `(${s.className})` : ''}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+
+                      {/* Score selector */}
+                      <div className="flex items-center gap-1.5">
+                        <span className="font-bold text-slate-700">Note :</span>
+                        <select
+                          value={evalAttemptScoreFilter}
+                          onChange={e => setEvalAttemptScoreFilter(e.target.value as any)}
+                          className="h-8 px-2.5 bg-white border border-slate-200 rounded-xl font-medium text-slate-800 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                        >
+                          <option value="all">Toutes notes</option>
+                          <option value="pass">Validés (≥ 10/20)</option>
+                          <option value="fail">Échoués (&lt; 10/20)</option>
+                          <option value="high">Excellents (≥ 16/20)</option>
+                        </select>
+                      </div>
+
+                      {/* Sort selector */}
+                      <div className="flex items-center gap-1.5">
+                        <ArrowUpDown className="w-3.5 h-3.5 text-slate-400" />
+                        <select
+                          value={evalAttemptSortBy}
+                          onChange={e => setEvalAttemptSortBy(e.target.value as any)}
+                          className="h-8 px-2.5 bg-white border border-slate-200 rounded-xl font-medium text-slate-800 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                        >
+                          <option value="date-desc">Plus récent d'abord</option>
+                          <option value="date-asc">Plus ancien d'abord</option>
+                          <option value="score-desc">Meilleure note d'abord</option>
+                          <option value="score-asc">Note la plus basse</option>
+                          <option value="name-asc">Élève (A → Z)</option>
+                        </select>
+                      </div>
+                    </div>
+
+                    {/* Search input */}
+                    <div className="relative w-full sm:w-60">
+                      <Search className="w-3 h-3 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2" />
+                      <input
+                        type="text"
+                        placeholder="Rechercher élève ou classe..."
+                        value={evalAttemptSearch}
+                        onChange={e => setEvalAttemptSearch(e.target.value)}
+                        className="h-8 pl-7 pr-3 bg-white border border-slate-200 rounded-xl text-xs w-full focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                      />
+                    </div>
+                  </div>
+
+                  {/* Summary Banner for filtered attempts */}
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 text-xs text-center">
+                    <div className="p-3 rounded-2xl bg-indigo-50 border border-indigo-100">
+                      <span className="text-[10px] text-indigo-500 uppercase font-bold block">Tentatives listées</span>
+                      <strong className="text-xl font-black text-indigo-900">{filteredAttemptsForQcm.length}</strong>
+                    </div>
+                    <div className="p-3 rounded-2xl bg-purple-50 border border-purple-100">
+                      <span className="text-[10px] text-purple-600 uppercase font-bold block">Élèves distincts</span>
+                      <strong className="text-xl font-black text-purple-900">{distinctAttemptStudents.length}</strong>
+                    </div>
+                    <div className="p-3 rounded-2xl bg-emerald-50 border border-emerald-100">
+                      <span className="text-[10px] text-emerald-600 uppercase font-bold block">Moyenne des essais</span>
+                      <strong className="text-xl font-black text-emerald-900">
+                        {filteredAttemptsForQcm.length > 0
+                          ? (filteredAttemptsForQcm.reduce((acc, a) => acc + (a.score20 || 0), 0) / filteredAttemptsForQcm.length).toFixed(1)
+                          : '0'} / 20
+                      </strong>
+                    </div>
+                    <div className="p-3 rounded-2xl bg-sky-50 border border-sky-100">
+                      <span className="text-[10px] text-sky-600 uppercase font-bold block">Taux moyen de réussite</span>
+                      <strong className="text-xl font-black text-sky-900">
+                        {filteredAttemptsForQcm.length > 0
+                          ? Math.round(filteredAttemptsForQcm.reduce((acc, a) => acc + (a.successRate || 0), 0) / filteredAttemptsForQcm.length)
+                          : 0}%
+                      </strong>
+                    </div>
+                  </div>
+
+                  {/* Attempts Table */}
+                  <div className="border border-slate-200 rounded-2xl overflow-hidden shadow-2xs">
+                    <table className="w-full text-left text-xs">
+                      <thead className="bg-slate-100 text-slate-700 font-bold border-b border-slate-200 select-none">
+                        <tr>
+                          <th className="p-3">Date & Heure</th>
+                          <th className="p-3">Élève & Classe</th>
+                          <th className="p-3 text-center">N° Tentative</th>
+                          <th className="p-3 text-center">Note / 20</th>
+                          <th className="p-3 text-center">Score brut</th>
+                          <th className="p-3 text-center">Réponses (✓ / ✗)</th>
+                          <th className="p-3 text-center">Taux</th>
+                          <th className="p-3 text-center">Temps</th>
+                          <th className="p-3 text-right no-print">Actions</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100">
+                        {filteredAttemptsForQcm.length === 0 ? (
+                          <tr>
+                            <td colSpan={9} className="p-8 text-center text-slate-400">
+                              <Clock className="w-8 h-8 text-slate-300 mx-auto mb-2" />
+                              <p className="font-semibold text-slate-700">Aucune tentative trouvée</p>
+                              <p className="text-[11px] text-slate-400 mt-0.5">Modifiez vos filtres pour afficher les passages des élèves.</p>
+                            </td>
+                          </tr>
+                        ) : (
+                          filteredAttemptsForQcm.map(att => {
+                            const studentAttList = attemptsByStudent.get(att.studentId) || [];
+                            const attIdx = studentAttList.findIndex(a => a.id === att.id);
+                            const attemptNum = attIdx !== -1 ? attIdx + 1 : 1;
+                            const totalStudentAtts = studentAttList.length;
+                            const prevAtt = attIdx > 0 ? studentAttList[attIdx - 1] : null;
+                            const diff = prevAtt ? Math.round((att.score20 - prevAtt.score20) * 10) / 10 : null;
+
+                            let badgeBg = 'bg-rose-50 text-rose-700 border-rose-200';
+                            if (att.score20 >= 16) badgeBg = 'bg-emerald-50 text-emerald-700 border-emerald-200';
+                            else if (att.score20 >= 12) badgeBg = 'bg-sky-50 text-sky-700 border-sky-200';
+                            else if (att.score20 >= 10) badgeBg = 'bg-amber-50 text-amber-800 border-amber-200';
+
+                            return (
+                              <tr key={att.id} className="hover:bg-slate-50 transition-colors">
+                                <td className="p-3 whitespace-nowrap text-slate-600">
+                                  <div className="font-semibold text-slate-800">
+                                    {new Date(att.completedAt).toLocaleDateString('fr-FR', {
+                                      weekday: 'short',
+                                      day: 'numeric',
+                                      month: 'short'
+                                    })}
+                                  </div>
+                                  <div className="text-[10px] text-slate-400">
+                                    {new Date(att.completedAt).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })}
+                                  </div>
+                                </td>
+                                <td className="p-3 whitespace-nowrap">
+                                  <div className="font-bold text-slate-900">{att.studentName}</div>
+                                  <div className="flex items-center gap-1.5 mt-0.5">
+                                    <span className="px-1.5 py-0.2 rounded text-[10px] font-semibold bg-slate-100 text-slate-700 border border-slate-200">
+                                      {att.className || 'Classe'}
+                                    </span>
+                                    {att.studentNumber && (
+                                      <span className="font-mono text-[10px] text-slate-400">N° {att.studentNumber}</span>
+                                    )}
+                                  </div>
+                                </td>
+                                <td className="p-3 text-center whitespace-nowrap">
+                                  <div className="inline-flex items-center gap-1">
+                                    <span className="px-2 py-0.5 rounded-lg text-xs font-black bg-indigo-50 text-indigo-700 border border-indigo-200">
+                                      Essai #{attemptNum}
+                                    </span>
+                                    {totalStudentAtts > 1 && (
+                                      <span className="text-[10px] text-slate-400">/ {totalStudentAtts}</span>
+                                    )}
+                                  </div>
+                                  {diff !== null && (
+                                    <div className={`text-[10px] font-bold mt-0.5 ${diff > 0 ? 'text-emerald-600' : diff < 0 ? 'text-rose-600' : 'text-slate-400'}`}>
+                                      {diff > 0 ? `+${diff}` : diff} pts vs précédent
+                                    </div>
+                                  )}
+                                </td>
+                                <td className="p-3 text-center whitespace-nowrap">
+                                  <span className={`px-2.5 py-1 rounded-full font-black text-xs border ${badgeBg}`}>
+                                    {att.score20} / 20
+                                  </span>
+                                </td>
+                                <td className="p-3 text-center font-medium text-slate-600">
+                                  {att.totalScore} / {att.maxScore} pts
+                                </td>
+                                <td className="p-3 text-center whitespace-nowrap">
+                                  <span className="inline-flex items-center gap-1 font-bold text-emerald-700 bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-200 text-[10px]">
+                                    ✓ {att.correctCount}
+                                  </span>
+                                  <span className="mx-1 text-slate-300">/</span>
+                                  <span className="inline-flex items-center gap-1 font-bold text-rose-700 bg-rose-50 px-1.5 py-0.5 rounded border border-rose-200 text-[10px]">
+                                    ✗ {att.incorrectCount}
+                                  </span>
+                                </td>
+                                <td className="p-3 text-center">
+                                  <span className="font-bold text-slate-800">{att.successRate}%</span>
+                                </td>
+                                <td className="p-3 text-center text-slate-500 whitespace-nowrap">
+                                  {Math.floor(att.timeSpentSeconds / 60)}m {att.timeSpentSeconds % 60}s
+                                </td>
+                                <td className="p-3 text-right no-print whitespace-nowrap">
+                                  <div className="flex items-center justify-end gap-1.5">
+                                    <button
+                                      type="button"
+                                      onClick={() => setSelectedStudentForHistory({
+                                        studentId: att.studentId,
+                                        studentName: att.studentName || 'Élève',
+                                        studentNumber: att.studentNumber,
+                                        className: att.className
+                                      })}
+                                      className="px-2.5 py-1 text-[11px] font-semibold text-purple-700 hover:bg-purple-50 rounded-lg border border-purple-200 transition-colors cursor-pointer inline-flex items-center gap-1"
+                                      title="Voir tous les essais de cet élève"
+                                    >
+                                      <Clock className="w-3 h-3 text-purple-600" />
+                                      <span className="hidden sm:inline">Historique</span>
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => setInspectingSubmission(att)}
+                                      className="px-2.5 py-1 text-[11px] font-semibold text-indigo-600 hover:bg-indigo-50 rounded-lg border border-indigo-200 transition-colors cursor-pointer inline-flex items-center gap-1"
+                                      title="Consulter la copie détaillée de cet essai"
+                                    >
+                                      <Eye className="w-3 h-3" />
+                                      <span>Voir copie</span>
+                                    </button>
+                                  </div>
+                                </td>
+                              </tr>
+                            );
+                          })
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+
+              {/* TAB 3: Question Success Rates Analytics */}
+              {evalResultsTab === 'questions' && evaluationData.questionStats && evaluationData.questionStats.length > 0 && (
+                <div className="pt-2">
                       <div className="flex flex-wrap items-center justify-between gap-3 mb-2.5">
                         <div>
                           <h4 className="text-xs font-bold text-slate-900 uppercase tracking-wider flex items-center gap-1.5 flex-wrap">
@@ -3274,6 +3719,207 @@ export const TeacherQCMSection: React.FC<TeacherQCMSectionProps> = ({
               <button
                 type="button"
                 onClick={() => setEvaluationQcm(null)}
+                className="px-4 py-2 bg-slate-900 hover:bg-slate-800 text-white rounded-xl text-xs font-bold cursor-pointer"
+              >
+                Fermer
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ========================================================================= */}
+      {/* MODAL: HISTORIQUE DES ESSAIS D'UN ÉLÈVE SUR CE QCM                       */}
+      {/* ========================================================================= */}
+      {selectedStudentForHistory && evaluationQcm && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/70 backdrop-blur-sm p-4 overflow-y-auto">
+          <div className="bg-white rounded-3xl shadow-2xl max-w-3xl w-full border border-slate-200 overflow-hidden my-6 animate-in fade-in zoom-in-95 duration-150">
+            {/* Header */}
+            <div className="p-6 bg-slate-900 text-white flex items-center justify-between">
+              <div>
+                <div className="flex items-center gap-2">
+                  <span className="p-1.5 rounded-lg bg-indigo-500/20 text-indigo-400 border border-indigo-400/30">
+                    <Clock className="w-4 h-4" />
+                  </span>
+                  <h3 className="font-bold text-base">Historique des Essais de l'Élève</h3>
+                </div>
+                <p className="text-xs text-slate-300 mt-1">
+                  Élève : <strong className="text-white font-bold">{selectedStudentForHistory.studentName}</strong> • Classe : <span className="text-indigo-300 font-semibold">{selectedStudentForHistory.className || selectedClassDisplayName}</span> • N° {selectedStudentForHistory.studentNumber || '—'}
+                </p>
+                <p className="text-[11px] text-slate-400">
+                  QCM : <strong className="text-indigo-300">{evaluationQcm.title}</strong>
+                </p>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => setSelectedStudentForHistory(null)}
+                className="w-8 h-8 rounded-full bg-slate-800 hover:bg-slate-700 text-slate-300 flex items-center justify-center cursor-pointer transition-colors"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="p-6 space-y-6 max-h-[75vh] overflow-y-auto">
+              {/* KPIs for this student */}
+              {(() => {
+                const atts = selectedStudentAttempts;
+                const totalAtts = atts.length;
+                if (totalAtts === 0) {
+                  return (
+                    <div className="p-8 text-center bg-slate-50 rounded-2xl border border-slate-200 text-slate-500">
+                      <Clock className="w-8 h-8 mx-auto text-slate-300 mb-2" />
+                      <p className="font-semibold text-xs">Aucune tentative détaillée enregistrée pour cet élève sur ce QCM.</p>
+                    </div>
+                  );
+                }
+                const bestScore = Math.max(...atts.map(a => a.score20));
+                const firstScore = atts[0].score20;
+                const latestScore = atts[totalAtts - 1].score20;
+                const diff = Math.round((latestScore - firstScore) * 10) / 10;
+                const avg = Math.round((atts.reduce((acc, a) => acc + a.score20, 0) / totalAtts) * 10) / 10;
+
+                return (
+                  <>
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                      <div className="p-3.5 rounded-2xl bg-indigo-50 border border-indigo-100 text-center">
+                        <span className="text-[10px] uppercase font-bold text-indigo-600 block">Total Tentatives</span>
+                        <strong className="text-2xl font-black text-indigo-900">{totalAtts}</strong>
+                        <p className="text-[10px] text-indigo-600 mt-0.5">passage{totalAtts > 1 ? 's' : ''}</p>
+                      </div>
+
+                      <div className="p-3.5 rounded-2xl bg-emerald-50 border border-emerald-100 text-center">
+                        <span className="text-[10px] uppercase font-bold text-emerald-600 block">Meilleure Note</span>
+                        <strong className="text-2xl font-black text-emerald-900">{bestScore} / 20</strong>
+                        <p className="text-[10px] text-emerald-600 mt-0.5">Record obtenu</p>
+                      </div>
+
+                      <div className="p-3.5 rounded-2xl bg-sky-50 border border-sky-100 text-center">
+                        <span className="text-[10px] uppercase font-bold text-sky-600 block">Dernier Essai</span>
+                        <strong className="text-2xl font-black text-sky-900">{latestScore} / 20</strong>
+                        <p className="text-[10px] text-sky-600 mt-0.5">Note finale</p>
+                      </div>
+
+                      <div className="p-3.5 rounded-2xl bg-purple-50 border border-purple-100 text-center">
+                        <span className="text-[10px] uppercase font-bold text-purple-600 block">Progression</span>
+                        <strong className={`text-2xl font-black ${diff > 0 ? 'text-emerald-700' : diff < 0 ? 'text-rose-700' : 'text-slate-700'}`}>
+                          {diff > 0 ? `+${diff}` : diff} pts
+                        </strong>
+                        <p className="text-[10px] text-purple-600 mt-0.5">Moyenne : {avg}/20</p>
+                      </div>
+                    </div>
+
+                    {/* Timeline of all attempts for this student */}
+                    <div className="space-y-3">
+                      <h4 className="text-xs font-bold text-slate-800 uppercase tracking-wider flex items-center justify-between">
+                        <span>Chronologie des tentatives ({totalAtts})</span>
+                        <span className="text-[11px] font-normal text-slate-500">De la plus ancienne à la plus récente</span>
+                      </h4>
+
+                      <div className="space-y-2.5">
+                        {atts.map((att, idx) => {
+                          const prev = idx > 0 ? atts[idx - 1] : null;
+                          const stepDiff = prev ? Math.round((att.score20 - prev.score20) * 10) / 10 : null;
+                          const isBest = att.score20 === bestScore;
+
+                          return (
+                            <div
+                              key={att.id}
+                              className={`p-4 rounded-2xl border transition-all ${
+                                isBest
+                                  ? 'bg-emerald-50/40 border-emerald-300 ring-1 ring-emerald-300/40'
+                                  : 'bg-white border-slate-200 hover:border-indigo-200'
+                              } flex flex-col sm:flex-row sm:items-center justify-between gap-4 shadow-2xs`}
+                            >
+                              <div className="flex items-start gap-3">
+                                <div className={`w-9 h-9 rounded-xl flex items-center justify-center font-black text-xs shrink-0 ${
+                                  isBest ? 'bg-emerald-600 text-white shadow-xs' : 'bg-slate-100 text-slate-700'
+                                }`}>
+                                  #{idx + 1}
+                                </div>
+                                <div>
+                                  <div className="flex items-center gap-2 flex-wrap">
+                                    <span className="font-extrabold text-slate-900 text-sm">
+                                      Tentative n°{idx + 1}
+                                    </span>
+                                    {isBest && (
+                                      <span className="px-2 py-0.5 rounded-full text-[10px] font-black bg-emerald-100 text-emerald-800 border border-emerald-200">
+                                        ★ Meilleur score
+                                      </span>
+                                    )}
+                                    {stepDiff !== null && (
+                                      <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                                        stepDiff > 0
+                                          ? 'bg-emerald-100 text-emerald-800'
+                                          : stepDiff < 0
+                                          ? 'bg-rose-100 text-rose-800'
+                                          : 'bg-slate-100 text-slate-600'
+                                      }`}>
+                                        {stepDiff > 0 ? `+${stepDiff} pts` : `${stepDiff} pts`} vs essai précédent
+                                      </span>
+                                    )}
+                                  </div>
+
+                                  <div className="flex items-center gap-3 text-xs text-slate-500 mt-1 flex-wrap">
+                                    <span>
+                                      Passé le {new Date(att.completedAt).toLocaleDateString('fr-FR', {
+                                        weekday: 'short',
+                                        day: 'numeric',
+                                        month: 'short',
+                                        year: 'numeric'
+                                      })} à {new Date(att.completedAt).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })}
+                                    </span>
+                                    <span>•</span>
+                                    <span>Durée : {Math.floor(att.timeSpentSeconds / 60)}m {att.timeSpentSeconds % 60}s</span>
+                                    <span>•</span>
+                                    <span className="text-emerald-700 font-semibold">✓ {att.correctCount}</span>
+                                    <span>/</span>
+                                    <span className="text-rose-700 font-semibold">✗ {att.incorrectCount}</span>
+                                  </div>
+                                </div>
+                              </div>
+
+                              <div className="flex items-center gap-3 self-end sm:self-center">
+                                <div className="text-right">
+                                  <span className={`px-3 py-1 rounded-xl text-xs font-black border inline-block ${
+                                    att.score20 >= 16
+                                      ? 'bg-emerald-50 text-emerald-800 border-emerald-300'
+                                      : att.score20 >= 10
+                                      ? 'bg-sky-50 text-sky-800 border-sky-300'
+                                      : 'bg-rose-50 text-rose-800 border-rose-300'
+                                  }`}>
+                                    {att.score20} / 20
+                                  </span>
+                                  <div className="text-[10px] text-slate-400 mt-0.5">
+                                    {att.totalScore} / {att.maxScore} pts ({att.successRate}%)
+                                  </div>
+                                </div>
+
+                                <button
+                                  type="button"
+                                  onClick={() => setInspectingSubmission(att)}
+                                  className="px-3 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 rounded-xl text-xs font-bold inline-flex items-center gap-1.5 transition-colors cursor-pointer"
+                                  title="Consulter la copie détaillée de cette tentative"
+                                >
+                                  <Eye className="w-3.5 h-3.5" />
+                                  <span>Voir la copie</span>
+                                </button>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  </>
+                );
+              })()}
+            </div>
+
+            {/* Footer */}
+            <div className="p-4 bg-slate-50 border-t border-slate-200 flex justify-end">
+              <button
+                type="button"
+                onClick={() => setSelectedStudentForHistory(null)}
                 className="px-4 py-2 bg-slate-900 hover:bg-slate-800 text-white rounded-xl text-xs font-bold cursor-pointer"
               >
                 Fermer

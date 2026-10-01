@@ -39,10 +39,14 @@ import {
   X,
   Pencil,
   BarChart3,
-  Layers
+  Layers,
+  Clock,
+  TrendingUp,
+  ChevronDown,
+  ChevronUp
 } from 'lucide-react';
 import { api } from '../api';
-import { ClassGroup, Student, TeacherUser } from '../types';
+import { ClassGroup, Student, TeacherUser, QCMAttempt } from '../types';
 import { CoursesSection } from './CoursesSection';
 import { TeacherEvaluationsSection } from './TeacherEvaluationsSection';
 import { TeacherQCMSection } from './TeacherQCMSection';
@@ -144,6 +148,137 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
   const [editIsRepeating, setEditIsRepeating] = useState(false);
   const [editNotes, setEditNotes] = useState('');
   const [isSavingStudent, setIsSavingStudent] = useState(false);
+
+  // Student QCM attempt history inspection modal
+  const [studentForQcmHistory, setStudentForQcmHistory] = useState<Student | null>(null);
+  const [studentQcmAttempts, setStudentQcmAttempts] = useState<QCMAttempt[]>([]);
+  const [loadingStudentQcmAttempts, setLoadingStudentQcmAttempts] = useState(false);
+  const [studentInspectingAttempt, setStudentInspectingAttempt] = useState<QCMAttempt | null>(null);
+  const [studentQcmFilterQcm, setStudentQcmFilterQcm] = useState<string>('all');
+  const [studentQcmSort, setStudentQcmSort] = useState<'date-desc' | 'date-asc' | 'score-desc' | 'score-asc'>('date-desc');
+  const [expandedStudentQcmGroups, setExpandedStudentQcmGroups] = useState<Set<string>>(new Set());
+
+  const handleOpenStudentQcmHistory = async (student: Student) => {
+    setStudentForQcmHistory(student);
+    setStudentInspectingAttempt(null);
+    setStudentQcmFilterQcm('all');
+    setStudentQcmSort('date-desc');
+    setLoadingStudentQcmAttempts(true);
+    try {
+      const atts = await api.getTeacherQCMAttempts(session!.token, { studentId: student.id });
+      setStudentQcmAttempts(atts || []);
+      const allQcmIds = new Set((atts || []).map(a => a.qcmId));
+      setExpandedStudentQcmGroups(allQcmIds);
+    } catch {
+      setStudentQcmAttempts([]);
+    } finally {
+      setLoadingStudentQcmAttempts(false);
+    }
+  };
+
+  const distinctQcmsForStudentHistory = React.useMemo(() => {
+    const map = new Map<string, string>();
+    studentQcmAttempts.forEach(a => {
+      if (!map.has(a.qcmId)) map.set(a.qcmId, a.qcmTitle || 'QCM');
+    });
+    return Array.from(map.entries()).map(([id, title]) => ({ id, title }));
+  }, [studentQcmAttempts]);
+
+  const groupedStudentQcmAttempts = React.useMemo(() => {
+    if (!studentQcmAttempts || studentQcmAttempts.length === 0) return [];
+    const map = new Map<string, QCMAttempt[]>();
+    for (const att of studentQcmAttempts) {
+      if (studentQcmFilterQcm !== 'all' && att.qcmId !== studentQcmFilterQcm) {
+        continue;
+      }
+      if (!map.has(att.qcmId)) {
+        map.set(att.qcmId, []);
+      }
+      map.get(att.qcmId)!.push(att);
+    }
+
+    const groups: Array<{
+      qcmId: string;
+      qcmTitle: string;
+      level?: string;
+      section?: string;
+      attempts: Array<QCMAttempt & { attemptNumber: number; diffVsPrev: number | null }>;
+      totalAttempts: number;
+      bestScore20: number;
+      worstScore20: number;
+      avgScore20: string;
+      avgSuccessRate: number;
+      firstAttempt: QCMAttempt;
+      latestAttempt: QCMAttempt;
+      progression: number;
+    }> = [];
+
+    map.forEach((atts, qcmId) => {
+      const chronoSorted = [...atts].sort((a, b) => new Date(a.completedAt).getTime() - new Date(b.completedAt).getTime());
+      
+      const enrichedWithChrono: Array<QCMAttempt & { attemptNumber: number; diffVsPrev: number | null }> = chronoSorted.map((att, idx) => {
+        const prev = idx > 0 ? chronoSorted[idx - 1] : null;
+        const diff = prev ? Math.round(((att.score20 || 0) - (prev.score20 || 0)) * 10) / 10 : null;
+        return {
+          ...att,
+          attemptNumber: idx + 1,
+          diffVsPrev: diff
+        };
+      });
+
+      const first = chronoSorted[0];
+      const latest = chronoSorted[chronoSorted.length - 1];
+      const scores = atts.map(a => a.score20 || 0);
+      const best = Math.max(...scores);
+      const worst = Math.min(...scores);
+      const avg = (scores.reduce((a, b) => a + b, 0) / scores.length).toFixed(1);
+      const avgRate = Math.round(atts.reduce((a, b) => a + (b.successRate || 0), 0) / atts.length);
+      const prog = Math.round(((latest.score20 || 0) - (first.score20 || 0)) * 10) / 10;
+
+      const sortedDisplay = [...enrichedWithChrono].sort((a, b) => {
+        if (studentQcmSort === 'date-desc') return new Date(b.completedAt).getTime() - new Date(a.completedAt).getTime();
+        if (studentQcmSort === 'date-asc') return new Date(a.completedAt).getTime() - new Date(b.completedAt).getTime();
+        if (studentQcmSort === 'score-desc') return (b.score20 || 0) - (a.score20 || 0);
+        if (studentQcmSort === 'score-asc') return (a.score20 || 0) - (b.score20 || 0);
+        return 0;
+      });
+
+      groups.push({
+        qcmId,
+        qcmTitle: atts[0].qcmTitle || 'QCM',
+        level: atts[0].level,
+        section: atts[0].section,
+        attempts: sortedDisplay,
+        totalAttempts: atts.length,
+        bestScore20: best,
+        worstScore20: worst,
+        avgScore20: avg,
+        avgSuccessRate: avgRate,
+        firstAttempt: first,
+        latestAttempt: latest,
+        progression: prog
+      });
+    });
+
+    return groups;
+  }, [studentQcmAttempts, studentQcmFilterQcm, studentQcmSort]);
+
+  const studentOverallQcmMetrics = React.useMemo(() => {
+    if (!studentQcmAttempts.length) return null;
+    const totalAttempts = studentQcmAttempts.length;
+    const scores = studentQcmAttempts.map(a => a.score20 || 0);
+    const avgScore20 = (scores.reduce((a, b) => a + b, 0) / totalAttempts).toFixed(1);
+    const bestScore20 = Math.max(...scores);
+    const totalQcms = new Set(studentQcmAttempts.map(a => a.qcmId)).size;
+    const avgRate = Math.round(studentQcmAttempts.reduce((a, b) => a + (b.successRate || 0), 0) / totalAttempts);
+    return {
+      totalAttempts,
+      avgScore20,
+      bestScore20,
+      totalQcms,
+      avgRate
+    };
+  }, [studentQcmAttempts]);
 
   // Delete entire class confirmation modal state
   const [classToDelete, setClassToDelete] = useState<{ id: string; name: string; studentCount: number } | null>(null);
@@ -1421,6 +1556,16 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
                         <div className="inline-flex items-center gap-1">
                           <button
                             type="button"
+                            onClick={() => handleOpenStudentQcmHistory(student)}
+                            title="Consulter l'historique complet de tous les essais de QCM de cet élève"
+                            className="px-2 py-1 bg-purple-50 hover:bg-purple-100 text-purple-700 border border-purple-200 rounded-lg text-[11px] font-semibold inline-flex items-center gap-1 transition-colors cursor-pointer"
+                          >
+                            <Clock className="w-3 h-3 text-purple-600" />
+                            <span className="hidden sm:inline">Essais QCM</span>
+                          </button>
+
+                          <button
+                            type="button"
                             onClick={() => handleOpenEditStudent(student)}
                             title="Modifier toutes les informations de l'élève"
                             className="px-2 py-1 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 rounded-lg text-[11px] font-medium inline-flex items-center gap-1 transition-colors cursor-pointer"
@@ -2544,6 +2689,497 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
                 className="px-5 py-2 rounded-xl text-xs font-bold text-white bg-slate-900 hover:bg-slate-800 transition-colors cursor-pointer shadow-sm"
               >
                 Fermer
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL: HISTORIQUE COMPLET DES ESSAIS DE QCM DE L'ÉLÈVE */}
+      {studentForQcmHistory && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/70 backdrop-blur-sm p-4 overflow-y-auto">
+          <div className="bg-white rounded-3xl shadow-2xl max-w-4xl w-full border border-slate-200 overflow-hidden my-6 animate-in fade-in zoom-in-95 duration-150">
+            {/* Header */}
+            <div className="p-6 bg-slate-900 text-white flex items-center justify-between">
+              <div>
+                <div className="flex items-center gap-2">
+                  <span className="p-1.5 bg-purple-500/20 text-purple-300 rounded-xl border border-purple-500/30">
+                    <Clock className="w-5 h-5" />
+                  </span>
+                  <h3 className="font-bold text-base">Historique des Essais de QCM de l'Élève</h3>
+                </div>
+                <p className="text-xs text-slate-300 mt-1.5 flex flex-wrap items-center gap-1.5">
+                  <span>Élève :</span>
+                  <strong className="text-white font-bold text-sm">
+                    {studentForQcmHistory.firstName} {studentForQcmHistory.lastName}
+                  </strong>
+                  <span>•</span>
+                  <span>Classe :</span>
+                  <span className="px-2 py-0.5 rounded-md bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 font-semibold text-[11px]">
+                    {classes.find(c => c.id === studentForQcmHistory.classId)?.name || 'Classe'}
+                  </span>
+                  <span>•</span>
+                  <span className="font-mono text-slate-400">N° {studentForQcmHistory.studentNumber || '—'}</span>
+                  <span>•</span>
+                  <span className="text-[11px] text-amber-300">
+                    {studentForQcmHistory.isRepeating ? 'Redoublant' : 'Nouveau'}
+                  </span>
+                </p>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => setStudentForQcmHistory(null)}
+                className="p-2 text-slate-400 hover:text-white hover:bg-slate-800 rounded-xl transition-colors cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Modal Body */}
+            <div className="p-6 overflow-y-auto max-h-[75vh] space-y-4">
+              {loadingStudentQcmAttempts ? (
+                <div className="p-12 text-center text-slate-400">
+                  <RefreshCw className="w-8 h-8 animate-spin mx-auto mb-3 text-indigo-600" />
+                  <p className="text-sm font-semibold text-slate-700">Chargement de l'historique des essais...</p>
+                  <p className="text-xs text-slate-400 mt-1">Récupération des tentatives enregistrées sur les QCM.</p>
+                </div>
+              ) : studentQcmAttempts.length === 0 ? (
+                <div className="p-12 text-center text-slate-400 bg-slate-50 border border-dashed border-slate-200 rounded-3xl">
+                  <Clock className="w-12 h-12 text-slate-300 mx-auto mb-3" />
+                  <h4 className="text-base font-bold text-slate-700">Aucun essai enregistré pour cet élève</h4>
+                  <p className="text-xs text-slate-500 mt-1 max-w-md mx-auto">
+                    Cet élève n'a pas encore participé aux QCM ou n'a pas encore validé de tentative d'évaluation.
+                  </p>
+                </div>
+              ) : (
+                <>
+                  {/* Overall student QCM metrics banner */}
+                  {studentOverallQcmMetrics && (
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                      <div className="p-3.5 rounded-2xl bg-indigo-50 border border-indigo-100 text-center">
+                        <span className="text-[10px] text-indigo-600 uppercase font-bold tracking-wider block">QCM Évalués</span>
+                        <strong className="text-2xl font-black text-indigo-950 mt-0.5 block">
+                          {studentOverallQcmMetrics.totalQcms}
+                        </strong>
+                      </div>
+
+                      <div className="p-3.5 rounded-2xl bg-purple-50 border border-purple-100 text-center">
+                        <span className="text-[10px] text-purple-600 uppercase font-bold tracking-wider block">Total des Essais</span>
+                        <strong className="text-2xl font-black text-purple-950 mt-0.5 block">
+                          {studentOverallQcmMetrics.totalAttempts}
+                        </strong>
+                      </div>
+
+                      <div className="p-3.5 rounded-2xl bg-emerald-50 border border-emerald-100 text-center">
+                        <span className="text-[10px] text-emerald-600 uppercase font-bold tracking-wider block">Moyenne Générale</span>
+                        <strong className="text-2xl font-black text-emerald-950 mt-0.5 block">
+                          {studentOverallQcmMetrics.avgScore20} <span className="text-xs font-normal text-emerald-700">/ 20</span>
+                        </strong>
+                      </div>
+
+                      <div className="p-3.5 rounded-2xl bg-amber-50 border border-amber-100 text-center">
+                        <span className="text-[10px] text-amber-600 uppercase font-bold tracking-wider block">Meilleure Note</span>
+                        <strong className="text-2xl font-black text-amber-950 mt-0.5 block">
+                          {studentOverallQcmMetrics.bestScore20} <span className="text-xs font-normal text-amber-700">/ 20</span>
+                        </strong>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Filter and control toolbar */}
+                  <div className="p-3 bg-slate-50 border border-slate-200 rounded-2xl flex flex-wrap items-center justify-between gap-3 text-xs">
+                    <div className="flex flex-wrap items-center gap-2.5">
+                      {/* Filter by QCM */}
+                      <div className="flex items-center gap-1.5">
+                        <Filter className="w-3.5 h-3.5 text-slate-400" />
+                        <span className="font-semibold text-slate-700">QCM :</span>
+                        <select
+                          value={studentQcmFilterQcm}
+                          onChange={e => setStudentQcmFilterQcm(e.target.value)}
+                          className="h-7 px-2.5 bg-white border border-slate-200 rounded-xl text-xs font-medium text-slate-800 focus:outline-none focus:ring-1 focus:ring-indigo-500 max-w-xs"
+                        >
+                          <option value="all">Tous les QCM ({distinctQcmsForStudentHistory.length})</option>
+                          {distinctQcmsForStudentHistory.map(q => (
+                            <option key={q.id} value={q.id}>{q.title}</option>
+                          ))}
+                        </select>
+                      </div>
+
+                      {/* Sort attempts */}
+                      <div className="flex items-center gap-1.5">
+                        <ArrowUpDown className="w-3.5 h-3.5 text-slate-400" />
+                        <span className="font-semibold text-slate-700">Trier les essais :</span>
+                        <select
+                          value={studentQcmSort}
+                          onChange={e => setStudentQcmSort(e.target.value as any)}
+                          className="h-7 px-2.5 bg-white border border-slate-200 rounded-xl text-xs font-medium text-slate-800 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                        >
+                          <option value="date-desc">Plus récent d'abord</option>
+                          <option value="date-asc">Plus ancien d'abord</option>
+                          <option value="score-desc">Meilleure note d'abord</option>
+                          <option value="score-asc">Moins bonne note d'abord</option>
+                        </select>
+                      </div>
+                    </div>
+
+                    {/* Expand/Collapse All */}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (expandedStudentQcmGroups.size === groupedStudentQcmAttempts.length) {
+                          setExpandedStudentQcmGroups(new Set());
+                        } else {
+                          setExpandedStudentQcmGroups(new Set(groupedStudentQcmAttempts.map(g => g.qcmId)));
+                        }
+                      }}
+                      className="px-3 py-1 bg-white hover:bg-slate-100 text-indigo-700 border border-slate-200 rounded-xl text-xs font-bold transition-colors cursor-pointer"
+                    >
+                      {expandedStudentQcmGroups.size === groupedStudentQcmAttempts.length ? 'Tout replier' : 'Tout déplier'}
+                    </button>
+                  </div>
+
+                  {/* Grouped QCM cards */}
+                  <div className="space-y-3.5">
+                    {groupedStudentQcmAttempts.map(group => {
+                      const isExpanded = expandedStudentQcmGroups.has(group.qcmId);
+
+                      return (
+                        <div
+                          key={group.qcmId}
+                          className={`border rounded-2xl transition-all overflow-hidden ${
+                            isExpanded ? 'border-indigo-300 bg-indigo-50/10 shadow-xs' : 'border-slate-200 bg-white hover:border-slate-300'
+                          }`}
+                        >
+                          {/* Card Header */}
+                          <div
+                            onClick={() => {
+                              setExpandedStudentQcmGroups(prev => {
+                                const next = new Set(prev);
+                                if (next.has(group.qcmId)) next.delete(group.qcmId);
+                                else next.add(group.qcmId);
+                                return next;
+                              });
+                            }}
+                            className="p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 cursor-pointer select-none bg-slate-50/60 hover:bg-slate-100/70 transition-colors"
+                          >
+                            <div className="flex items-start gap-3">
+                              <div className="w-10 h-10 rounded-xl bg-purple-50 text-purple-700 border border-purple-100 flex items-center justify-center font-extrabold text-sm shrink-0">
+                                <BookOpen className="w-5 h-5" />
+                              </div>
+
+                              <div>
+                                <h4 className="font-bold text-sm text-slate-900 flex items-center gap-2 flex-wrap">
+                                  <span>{group.qcmTitle}</span>
+                                  {group.level && (
+                                    <span className="px-2 py-0.5 rounded text-[10px] font-semibold bg-slate-200 text-slate-700">
+                                      Niveau {group.level}
+                                    </span>
+                                  )}
+                                  {group.section && (
+                                    <span className="px-2 py-0.5 rounded text-[10px] font-semibold bg-slate-200 text-slate-700">
+                                      {group.section}
+                                    </span>
+                                  )}
+                                </h4>
+
+                                <div className="flex flex-wrap items-center gap-2 mt-1 text-xs text-slate-500">
+                                  <span className="inline-flex items-center gap-1 font-semibold text-indigo-700 bg-indigo-50 px-2 py-0.5 rounded-lg border border-indigo-200">
+                                    <Clock className="w-3 h-3 text-indigo-600" />
+                                    {group.totalAttempts} tentative{group.totalAttempts > 1 ? 's' : ''} effectuée{group.totalAttempts > 1 ? 's' : ''}
+                                  </span>
+
+                                  <span>•</span>
+                                  <span>Moyenne : <strong className="text-slate-800">{group.avgScore20}/20</strong></span>
+                                  <span>•</span>
+                                  <span>Taux moyen : <strong className="text-slate-800">{group.avgSuccessRate}%</strong></span>
+                                </div>
+                              </div>
+                            </div>
+
+                            {/* Summary Badges and Chevron */}
+                            <div className="flex items-center gap-3">
+                              <div className="text-right">
+                                <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-xl bg-emerald-50 text-emerald-800 border border-emerald-200 font-black text-xs">
+                                  <Trophy className="w-3.5 h-3.5 text-emerald-600" />
+                                  <span>Record : {group.bestScore20} / 20</span>
+                                </div>
+
+                                {group.totalAttempts > 1 && (
+                                  <div className="flex items-center justify-end gap-1 mt-1 text-[11px] font-bold">
+                                    <span className="text-slate-400 font-normal">Progression :</span>
+                                    <span className={`inline-flex items-center gap-0.5 ${
+                                      group.progression > 0 ? 'text-emerald-600' : group.progression < 0 ? 'text-rose-600' : 'text-slate-500'
+                                    }`}>
+                                      <TrendingUp className="w-3 h-3" />
+                                      {group.progression > 0 ? `+${group.progression}` : group.progression} pts
+                                    </span>
+                                  </div>
+                                )}
+                              </div>
+
+                              <div className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 bg-white border border-slate-200">
+                                {isExpanded ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+                              </div>
+                            </div>
+                          </div>
+
+                          {/* Expanded Attempts Table */}
+                          {isExpanded && (
+                            <div className="border-t border-slate-200 p-3 bg-white">
+                              <div className="overflow-x-auto">
+                                <table className="w-full text-left text-xs">
+                                  <thead className="bg-slate-50 text-slate-600 font-bold border-b border-slate-200">
+                                    <tr>
+                                      <th className="p-2.5">Passage</th>
+                                      <th className="p-2.5">Date & Heure</th>
+                                      <th className="p-2.5 text-center">Note / 20</th>
+                                      <th className="p-2.5 text-center">Score brut</th>
+                                      <th className="p-2.5 text-center">Réponses (✓ / ✗)</th>
+                                      <th className="p-2.5 text-center">Taux</th>
+                                      <th className="p-2.5 text-center">Temps</th>
+                                      <th className="p-2.5 text-right">Action</th>
+                                    </tr>
+                                  </thead>
+                                  <tbody className="divide-y divide-slate-100">
+                                    {group.attempts.map(att => {
+                                      let badgeBg = 'bg-rose-50 text-rose-700 border-rose-200';
+                                      if (att.score20 >= 16) badgeBg = 'bg-emerald-50 text-emerald-700 border-emerald-200';
+                                      else if (att.score20 >= 12) badgeBg = 'bg-sky-50 text-sky-700 border-sky-200';
+                                      else if (att.score20 >= 10) badgeBg = 'bg-amber-50 text-amber-800 border-amber-200';
+
+                                      return (
+                                        <tr key={att.id} className="hover:bg-slate-50/70 transition-colors">
+                                          <td className="p-2.5 whitespace-nowrap">
+                                            <div className="inline-flex items-center gap-1.5">
+                                              <span className="px-2 py-0.5 rounded-lg text-xs font-black bg-indigo-50 text-indigo-700 border border-indigo-200">
+                                                Essai #{att.attemptNumber}
+                                              </span>
+                                              {att.diffVsPrev !== null && (
+                                                <span className={`text-[10px] font-bold ${
+                                                  att.diffVsPrev > 0 ? 'text-emerald-600' : att.diffVsPrev < 0 ? 'text-rose-600' : 'text-slate-400'
+                                                }`}>
+                                                  ({att.diffVsPrev > 0 ? `+${att.diffVsPrev}` : att.diffVsPrev})
+                                                </span>
+                                              )}
+                                            </div>
+                                          </td>
+
+                                          <td className="p-2.5 whitespace-nowrap text-slate-600">
+                                            <div className="font-semibold text-slate-800">
+                                              {new Date(att.completedAt).toLocaleDateString('fr-FR', {
+                                                day: 'numeric',
+                                                month: 'short',
+                                                year: 'numeric'
+                                              })}
+                                            </div>
+                                            <div className="text-[10px] text-slate-400">
+                                              {new Date(att.completedAt).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })}
+                                            </div>
+                                          </td>
+
+                                          <td className="p-2.5 text-center whitespace-nowrap">
+                                            <span className={`px-2.5 py-1 rounded-full font-black text-xs border ${badgeBg}`}>
+                                              {att.score20} / 20
+                                            </span>
+                                          </td>
+
+                                          <td className="p-2.5 text-center font-medium text-slate-700">
+                                            {att.totalScore} / {att.maxScore} pts
+                                          </td>
+
+                                          <td className="p-2.5 text-center whitespace-nowrap">
+                                            <span className="inline-flex items-center gap-1 font-bold text-emerald-700 bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-200 text-[10px]">
+                                              ✓ {att.correctCount}
+                                            </span>
+                                            <span className="mx-1 text-slate-300">/</span>
+                                            <span className="inline-flex items-center gap-1 font-bold text-rose-700 bg-rose-50 px-1.5 py-0.5 rounded border border-rose-200 text-[10px]">
+                                              ✗ {att.incorrectCount}
+                                            </span>
+                                          </td>
+
+                                          <td className="p-2.5 text-center font-bold text-slate-800">
+                                            {att.successRate}%
+                                          </td>
+
+                                          <td className="p-2.5 text-center text-slate-500 whitespace-nowrap">
+                                            {Math.floor(att.timeSpentSeconds / 60)}m {att.timeSpentSeconds % 60}s
+                                          </td>
+
+                                          <td className="p-2.5 text-right whitespace-nowrap">
+                                            <button
+                                              type="button"
+                                              onClick={() => setStudentInspectingAttempt(att)}
+                                              className="px-2.5 py-1 text-[11px] font-semibold text-indigo-700 bg-indigo-50 hover:bg-indigo-100 rounded-lg border border-indigo-200 transition-colors cursor-pointer inline-flex items-center gap-1"
+                                              title="Consulter le détail des réponses données lors de cet essai"
+                                            >
+                                              <Eye className="w-3 h-3 text-indigo-600" />
+                                              <span>Voir copie</span>
+                                            </button>
+                                          </td>
+                                        </tr>
+                                      );
+                                    })}
+                                  </tbody>
+                                </table>
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </>
+              )}
+            </div>
+
+            {/* Footer */}
+            <div className="p-4 bg-slate-50 border-t border-slate-200 flex items-center justify-between flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setStudentForQcmHistory(null);
+                  setSelectedRubrique('qcm_stats');
+                }}
+                className="px-3.5 py-2 rounded-xl text-xs font-semibold text-indigo-700 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 transition-colors cursor-pointer inline-flex items-center gap-1.5"
+              >
+                <BarChart3 className="w-3.5 h-3.5 text-indigo-600" />
+                <span>Ouvrir l'onglet Statistiques Globales des QCM</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setStudentForQcmHistory(null)}
+                className="px-5 py-2 rounded-xl text-xs font-bold text-white bg-slate-900 hover:bg-slate-800 transition-colors cursor-pointer"
+              >
+                Fermer
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* SUB-MODAL: INSPECTION DU DÉTAIL D'UN ESSAI (COPIE) */}
+      {studentInspectingAttempt && (
+        <div className="fixed inset-0 z-60 flex items-center justify-center bg-slate-900/80 backdrop-blur-md p-4 overflow-y-auto">
+          <div className="bg-white rounded-3xl shadow-2xl max-w-2xl w-full border border-slate-200 overflow-hidden my-6 animate-in fade-in zoom-in-95 duration-150">
+            {/* Header */}
+            <div className="p-6 bg-slate-900 text-white flex items-center justify-between">
+              <div>
+                <div className="flex items-center gap-2">
+                  <span className="p-1.5 bg-indigo-500/20 text-indigo-300 rounded-xl border border-indigo-500/30">
+                    <Eye className="w-4 h-4" />
+                  </span>
+                  <h3 className="font-bold text-base">Copie détaillée de la tentative</h3>
+                </div>
+                <p className="text-xs text-slate-300 mt-1">
+                  QCM : <strong className="text-indigo-300">{studentInspectingAttempt.qcmTitle}</strong>
+                </p>
+                <p className="text-[11px] text-slate-400 mt-0.5">
+                  Élève : <strong className="text-white">{studentForQcmHistory?.firstName} {studentForQcmHistory?.lastName}</strong> • Date : {new Date(studentInspectingAttempt.completedAt).toLocaleString('fr-FR')}
+                </p>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => setStudentInspectingAttempt(null)}
+                className="p-2 text-slate-400 hover:text-white hover:bg-slate-800 rounded-xl transition-colors cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Quick Metrics Bar */}
+            <div className="p-4 bg-slate-50 border-b border-slate-200 grid grid-cols-4 gap-2 text-center text-xs">
+              <div className="p-2.5 rounded-xl bg-white border border-slate-200 shadow-2xs">
+                <span className="text-[10px] text-slate-400 block font-semibold">Note obtenue</span>
+                <strong className={`text-base font-black ${
+                  studentInspectingAttempt.score20 >= 10 ? 'text-emerald-600' : 'text-rose-600'
+                }`}>
+                  {studentInspectingAttempt.score20} / 20
+                </strong>
+              </div>
+
+              <div className="p-2.5 rounded-xl bg-white border border-slate-200 shadow-2xs">
+                <span className="text-[10px] text-slate-400 block font-semibold">Points bruts</span>
+                <strong className="text-base font-black text-slate-800">
+                  {studentInspectingAttempt.totalScore} / {studentInspectingAttempt.maxScore}
+                </strong>
+              </div>
+
+              <div className="p-2.5 rounded-xl bg-white border border-slate-200 shadow-2xs">
+                <span className="text-[10px] text-slate-400 block font-semibold">Réponses</span>
+                <div className="text-xs font-black mt-1">
+                  <span className="text-emerald-700">✓ {studentInspectingAttempt.correctCount}</span>
+                  <span className="text-slate-300 mx-1">/</span>
+                  <span className="text-rose-700">✗ {studentInspectingAttempt.incorrectCount}</span>
+                </div>
+              </div>
+
+              <div className="p-2.5 rounded-xl bg-white border border-slate-200 shadow-2xs">
+                <span className="text-[10px] text-slate-400 block font-semibold">Temps passé</span>
+                <strong className="text-base font-black text-indigo-600">
+                  {Math.floor(studentInspectingAttempt.timeSpentSeconds / 60)}m {studentInspectingAttempt.timeSpentSeconds % 60}s
+                </strong>
+              </div>
+            </div>
+
+            {/* Answers Breakdown */}
+            <div className="p-6 overflow-y-auto max-h-[50vh] space-y-3">
+              <h4 className="text-xs font-bold text-slate-700 uppercase tracking-wider">
+                Détail des réponses enregistrées pour cet essai :
+              </h4>
+              {studentInspectingAttempt.answersJson ? (
+                (() => {
+                  try {
+                    const parsed = typeof studentInspectingAttempt.answersJson === 'string'
+                      ? JSON.parse(studentInspectingAttempt.answersJson)
+                      : studentInspectingAttempt.answersJson;
+                    const entries = Object.entries(parsed || {});
+                    if (entries.length === 0) {
+                      return <p className="text-xs text-slate-400">Aucun détail supplémentaire disponible.</p>;
+                    }
+                    return (
+                      <div className="space-y-2">
+                        {entries.map(([qId, val]: [string, any], idx) => (
+                          <div
+                            key={qId}
+                            className={`p-3 rounded-xl border text-xs flex items-center justify-between ${
+                              val.isCorrect
+                                ? 'bg-emerald-50/50 border-emerald-200 text-emerald-900'
+                                : 'bg-rose-50/50 border-rose-200 text-rose-900'
+                            }`}
+                          >
+                            <span className="font-semibold">Question #{idx + 1}</span>
+                            <div className="flex items-center gap-3">
+                              <span>Réponse choisie : <strong>Option {val.chosen || 'Non répondu'}</strong></span>
+                              <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                                val.isCorrect ? 'bg-emerald-200 text-emerald-900' : 'bg-rose-200 text-rose-900'
+                              }`}>
+                                {val.isCorrect ? `+${val.pointsEarned ?? 1} pts (Correct)` : 'Incorrect'}
+                              </span>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    );
+                  } catch {
+                    return <p className="text-xs text-slate-400">Détail non disponible.</p>;
+                  }
+                })()
+              ) : (
+                <p className="text-xs text-slate-400">Aucun détail de question disponible pour cette tentative.</p>
+              )}
+            </div>
+
+            {/* Sub-modal Footer */}
+            <div className="p-4 bg-slate-50 border-t border-slate-200 flex justify-end">
+              <button
+                type="button"
+                onClick={() => setStudentInspectingAttempt(null)}
+                className="px-5 py-2 bg-slate-900 hover:bg-slate-800 text-white rounded-xl text-xs font-bold cursor-pointer"
+              >
+                Retour à l'historique
               </button>
             </div>
           </div>

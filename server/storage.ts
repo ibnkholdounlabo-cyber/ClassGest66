@@ -2916,11 +2916,13 @@ for m in matieres:
 
   public getStudentQCMAttempts(studentId: string, qcmId?: string): QCMAttempt[] {
     let query = `
-      SELECT qa.*, q.title as qcmTitle, q.level, q.section, s.firstName, s.lastName, c.name as className
+      SELECT qa.*, q.title as qcmTitle, q.level, q.section, s.firstName, s.lastName, s.studentNumber,
+             COALESCE(c.name, c2.name, 'Classe') as className
       FROM qcm_attempts qa
       JOIN qcms q ON q.id = qa.qcmId
       JOIN students s ON s.id = qa.studentId
-      JOIN classes c ON c.id = qa.classId
+      LEFT JOIN classes c ON c.id = qa.classId
+      LEFT JOIN classes c2 ON c2.id = s.classId
       WHERE qa.studentId = ?
     `;
     const params: any[] = [studentId];
@@ -2941,6 +2943,7 @@ for m in matieres:
           qcmTitle: String(r.qcmTitle || 'QCM'),
           studentId: String(r.studentId),
           studentName: `${r.lastName.toUpperCase()} ${r.firstName}`,
+          studentNumber: String(r.studentNumber || ''),
           classId: String(r.classId),
           className: String(r.className || ''),
           level: r.level ? String(r.level) : undefined,
@@ -2987,11 +2990,13 @@ for m in matieres:
 
     // Get attempts
     let attQuery = `
-      SELECT qa.*, q.title as qcmTitle, q.level, q.section, s.firstName, s.lastName, c.name as className
+      SELECT qa.*, q.title as qcmTitle, q.level, q.section, s.firstName, s.lastName, s.studentNumber,
+             COALESCE(c.name, c2.name, 'Classe') as className
       FROM qcm_attempts qa
       JOIN qcms q ON q.id = qa.qcmId
       JOIN students s ON s.id = qa.studentId
-      JOIN classes c ON c.id = qa.classId
+      LEFT JOIN classes c ON c.id = qa.classId
+      LEFT JOIN classes c2 ON c2.id = s.classId
       WHERE 1=1
     `;
     const attParams: any[] = [];
@@ -3027,6 +3032,7 @@ for m in matieres:
         qcmTitle: String(r.qcmTitle || 'QCM'),
         studentId: String(r.studentId),
         studentName: `${r.lastName.toUpperCase()} ${r.firstName}`,
+        studentNumber: String(r.studentNumber || ''),
         classId: String(r.classId),
         className: String(r.className || ''),
         level: r.level ? String(r.level) : undefined,
@@ -3145,13 +3151,93 @@ for m in matieres:
 
     const subsRows = this.db.prepare(subsQuery).all(...params) as any[];
 
-    const submissions: Array<QCMSubmission & { studentName: string; studentNumber: string; className: string }> = subsRows.map(row => {
+    // Query all attempts for this QCM (including repeat practice attempts)
+    let attQuery = `
+      SELECT qa.*, q.title as qcmTitle, s.firstName, s.lastName, s.studentNumber, s.classId as studentClassId,
+             COALESCE(c.name, c2.name, 'Classe') as className
+      FROM qcm_attempts qa
+      JOIN qcms q ON q.id = qa.qcmId
+      JOIN students s ON s.id = qa.studentId
+      LEFT JOIN classes c ON c.id = qa.classId
+      LEFT JOIN classes c2 ON c2.id = s.classId
+      WHERE qa.qcmId = ?
+    `;
+    const attParams: any[] = [qcmId];
+    if (filterClassId && filterClassId !== 'all') {
+      attQuery += ` AND (qa.classId = ? OR s.classId = ?)`;
+      attParams.push(filterClassId, filterClassId);
+    }
+    attQuery += ` ORDER BY qa.completedAt DESC`;
+
+    let attRows: any[] = [];
+    try {
+      attRows = this.db.prepare(attQuery).all(...attParams) as any[];
+    } catch (err) {
+      console.warn('Error fetching qcm_attempts for evaluations:', err);
+    }
+
+    const allAttempts: QCMAttempt[] = attRows.map(r => {
+      let answersJson = {};
+      try { answersJson = JSON.parse(r.answersJson); } catch {}
+      return {
+        id: String(r.id),
+        qcmId: String(r.qcmId),
+        qcmTitle: String(r.qcmTitle || qcm.title),
+        studentId: String(r.studentId),
+        studentName: `${r.lastName.toUpperCase()} ${r.firstName}`,
+        studentNumber: String(r.studentNumber || ''),
+        classId: String(r.classId || r.studentClassId || ''),
+        className: String(r.className || ''),
+        totalQuestions: Number(r.totalQuestions),
+        correctCount: Number(r.correctCount),
+        incorrectCount: Number(r.incorrectCount),
+        successRate: Number(r.successRate),
+        totalScore: Number(r.totalScore),
+        maxScore: Number(r.maxScore),
+        score20: Number(r.score20),
+        timeSpentSeconds: Number(r.timeSpentSeconds || 0),
+        completedAt: String(r.completedAt),
+        answersJson
+      };
+    });
+
+    // Group attempts by studentId
+    const attemptsByStudent = new Map<string, QCMAttempt[]>();
+    for (const att of allAttempts) {
+      if (!attemptsByStudent.has(att.studentId)) {
+        attemptsByStudent.set(att.studentId, []);
+      }
+      attemptsByStudent.get(att.studentId)!.push(att);
+    }
+
+    const submissions: Array<QCMSubmission & {
+      studentName: string;
+      studentNumber: string;
+      className: string;
+      attemptsCount: number;
+      bestScore20: number;
+      latestScore20: number;
+    }> = subsRows.map(row => {
       let answersJson = {};
       try { answersJson = JSON.parse(row.answersJson); } catch {}
+      const stId = String(row.studentId);
+      const studentAtts = attemptsByStudent.get(stId) || [];
+      const attemptsCount = Math.max(1, studentAtts.length);
+      let bestScore20 = Number(row.score20);
+      let latestScore20 = Number(row.score20);
+
+      for (const a of studentAtts) {
+        if (a.score20 > bestScore20) bestScore20 = a.score20;
+      }
+      if (studentAtts.length > 0) {
+        // studentAtts is sorted by completedAt DESC, so element 0 is the latest attempt
+        latestScore20 = studentAtts[0].score20;
+      }
+
       return {
         id: String(row.id),
         qcmId: String(row.qcmId),
-        studentId: String(row.studentId),
+        studentId: stId,
         classId: String(row.classId || row.studentClassId || ''),
         className: String(row.className || ''),
         totalScore: Number(row.totalScore),
@@ -3162,7 +3248,10 @@ for m in matieres:
         completedAt: String(row.completedAt),
         studentName: `${row.lastName.toUpperCase()} ${row.firstName}`,
         studentNumber: String(row.studentNumber || ''),
-        qcmTitle: qcm.title
+        qcmTitle: qcm.title,
+        attemptsCount,
+        bestScore20,
+        latestScore20
       };
     });
 
@@ -3210,7 +3299,8 @@ for m in matieres:
       highestScore20,
       lowestScore20,
       submissions,
-      questionStats
+      questionStats,
+      allAttempts
     };
   }
 
